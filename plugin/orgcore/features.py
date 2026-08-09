@@ -131,10 +131,19 @@ def probe(home: Path | None = None, user_home: Path | None = None) -> dict:
                      "configure a persistent memory provider (memory-tencentdb)", "critical"))
 
     # ── Recommended (fullest-extent, medium value) ─────────────────────────
+    # Cron jobs live in a single jobs.json (hermes cron create), not per-job files.
+    cron_jobs: list[dict] = []
+    jobs_file = home / "cron" / "jobs.json"
+    if jobs_file.exists():
+        try:
+            import json as _json
+            cron_jobs = _json.loads(jobs_file.read_text(encoding="utf-8")).get("jobs", [])
+        except Exception:
+            cron_jobs = []
     cron_files = list(home.glob("cron/*.json")) if (home / "cron").is_dir() else []
-    if cron_files:
-        caps.append(_cap("cron", "ok", f"{len(cron_files)} cron job(s)",
-                     "scheduled jobs present", "recommended"))
+    if cron_jobs or cron_files:
+        caps.append(_cap("cron", "ok", f"{len(cron_jobs)} cron job(s) configured",
+                     "scheduled jobs present (note: need the gateway running to fire)", "recommended"))
     else:
         caps.append(_cap("cron", "missing", "no cron jobs configured",
                      "schedule watchdogs/briefings with `cronjob`", "recommended"))
