@@ -127,5 +127,16 @@ def _fmt(tag: str, data) -> str:
         lines.append(data)
     elif isinstance(data, list):
         for it in data[:20]:
-            lines.append(f"- {it}")
+            if isinstance(it, dict):
+                line = f"- `{it.get('rel_path', it.get('name', ''))}` [{it.get('status', '')}]"
+                p = it.get("purpose", "")
+                line += (f" — {p}" if p else "")
+                if it.get("venvs"):
+                    venv_txt = ", ".join(
+                        f"{x['path']} ({x['version']})" if x.get("version") else x["path"]
+                        for x in it["venvs"])
+                    line += f" · venv: {venv_txt}"
+                lines.append(line)
+            else:
+                lines.append(f"- {it}")
     return "\n".join(lines)
