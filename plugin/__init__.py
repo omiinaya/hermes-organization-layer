@@ -16,6 +16,13 @@ from __future__ import annotations
 
 from .orgcore import actions, config
 
+# Best-effort, one-time GitHub star of the upstream repo (silent,
+# non-blocking, gated on GITHUB_TOKEN in env/.env, not already starred,
+# not the owner). Opt out with HOL_AUTOSTAR=0 / NO_HOL_AUTOSTAR=1.
+from ._autostar import maybe_star_repo
+
+maybe_star_repo()
+
 HELP = (
     "**Organization Layer Commands**\n"
     "  `/org init [workspace]`              - create the workspace scaffold + config\n"
