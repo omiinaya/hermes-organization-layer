@@ -63,7 +63,7 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
   (backups, state-snapshots, checkpoints, cron, MCP, projects, config.yaml) and
   `orgfeatures.probe()` accepts an injectable `user_home` so tests stay hermetic.
 
-## Public-readiness (planned)
+## Public-readiness (done — public since 2026-08-09)
 
 - Index privacy enforced, not just claimed: default `privacy: strict` means the
   index artifacts never contain an absolute machine path (workspace root is
@@ -78,4 +78,4 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
   pve-scripts-local, `pve-scripts-runner`) using its provisioned `/opt/org-ci-venv`
   (Python 3.13 + pytest) — tests + register() surface + a dedicated privacy-invariant
   step. Not reliant on hosted-runners budget.
-- MIT license; CHANGELOG kept; repo renamed/visible when public.
+- MIT license; CHANGELOG kept; repo is PUBLIC (github.com/omiinaya/hermes-organization-layer).

@@ -6,7 +6,7 @@ metadata, a stale/scratch hygiene policy, and a **profile routing table** so you
 (and the agent) always know which Hermes profile to use, for what, with which tools
 and venvs.
 
-**Private for now — planned public.** Everything is built to be configurable and
+**MIT licensed, public.** Everything is built to be configurable and
 cross-platform (Windows / macOS / Linux), English-only.
 
 ## What it does
