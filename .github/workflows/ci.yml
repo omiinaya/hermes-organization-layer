@@ -23,9 +23,10 @@ jobs:
 
       - name: Verify register() exposes the full tool surface
         run: |
-          cd plugin
           /opt/org-ci-venv/bin/python - <<'EOF'
-          import sys; sys.path.insert(0,"."); import plugin as P
+          import sys; from pathlib import Path
+          sys.path.insert(0, str(Path.cwd() / "plugin"))
+          import plugin as P
           class Ctx:
               def __init__(s): s.cmds=[]; s.tools=[]
               def register_command(s,n,**k): s.cmds.append(n)
