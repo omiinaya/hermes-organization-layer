@@ -45,9 +45,12 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
 ## Cross-platform notes
 
 - Core (`orgcore/`) is pure Python stdlib: `pathlib`, `json`, `tarfile`, `shutil`,
-  `fnmatch`, `datetime`. No shell, no YAML parser dependency, no OS-specific calls.
+  `fnmatch`, `datetime`, `subprocess`, `shlex`. No shell, no YAML parser dependency,
+  no OS-specific calls.
 - Paths are always built with `pathlib`; never hardcode `/` or `\`.
 - `default_workspace_root()` resolves per-OS and honors `HERMES_ORG_WORKSPACE`.
+- Archive lifecycle is fully reversible: `prune --apply` tars into `_archive/`,
+  `restore <name>` extracts back (path-traversal guarded, refuses to overwrite).
 
 ## Public-readiness (planned)
 
@@ -55,8 +58,11 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
   index artifacts never contain an absolute machine path (workspace root is
   emitted as basename only); a regression test guards this invariant.
 - Per-entry paths are relative; no secrets ever stored. `full` privacy mode exists
-  only for explicit local debugging.
+  only for explicit local debugging. `org check` also scans per-entry metadata for
+  absolute-path leaks at runtime.
 - Config is a documented JSON file; example in `workspace-skel/` (incl. a
   `.gitignore.example` template for git-backed workspaces).
 - Tests (pytest) cover core behavior; English-only strings.
+- CI (GitHub Actions) runs the suite on Windows/macOS/Linux × Python 3.10–3.12 and
+  enforces the privacy invariant as a dedicated step.
 - MIT license; CHANGELOG kept; repo renamed/visible when public.

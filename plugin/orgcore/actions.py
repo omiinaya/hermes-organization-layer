@@ -6,7 +6,10 @@ Every cmd_* returns a (tag, data) pair; format with _fmt() for text output.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import shutil
+import subprocess
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,35 +68,212 @@ def cmd_find(query: str) -> tuple:
 
 
 def cmd_prune(dry_run: bool = True, apply: bool = False) -> tuple:
+    """Hygiene. dry-run (default) shows exactly which tarballs WOULD be created.
+
+    Only ``expired-scratch`` entries move under the default ``flag`` policy;
+    ``stale`` entries are flagged but kept on disk (they are only archived when
+    ``stale_policy == auto``). apply=True performs the move to _archive/.
+    """
     root = _root()
     cfg = config.load_config(root)
     items = orgindex.build_items(root, cfg)
-    policy = cfg["policy"]
+    auto = cfg["policy"].get("stale_policy") == "auto"
     candidates = [it for it in items if it["status"] in ("stale", "expired-scratch")]
 
+    # Which candidates actually move under the current policy?
+    will_move = [it for it in candidates
+                 if it["status"] == "expired-scratch" or (auto and it["status"] == "stale")]
+
     if not apply:
+        archive_dir = root / "_archive"
+        preview = []
+        for it in will_move:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            preview.append({
+                "rel_path": it["rel_path"],
+                "status": it["status"],
+                "dest": str(archive_dir / f"{it['name']}-{stamp}.tar.gz"),
+            })
         return "PRUNE (dry-run)", {
-            "candidates": candidates,
-            "note": "flag-only policy: nothing is deleted; apply moves items into _archive/",
+            "flagged": candidates,
+            "would_archive": preview,
+            "auto_policy": auto,
+            "note": ("flag-only policy: stale entries are flagged, not moved; "
+                     "only expired-scratch (and stale under auto) would be archived. "
+                     "Nothing was changed on disk."),
         }
 
-    auto = policy.get("stale_policy") == "auto"
     moved: list[str] = []
+    failures: list[str] = []
     archive_dir = root / "_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
-    for it in candidates:
-        if it["status"] == "expired-scratch" or auto:
-            src = root / it["rel_path"]
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-            dest = archive_dir / f"{it['name']}-{stamp}.tar.gz"
+    for it in will_move:
+        src = root / it["rel_path"]
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        dest = archive_dir / f"{it['name']}-{stamp}.tar.gz"
+        try:
+            with tarfile.open(dest, "w:gz") as tar:
+                tar.add(src, arcname=it["rel_path"])
+            shutil.rmtree(src)
+            moved.append(str(dest))
+        except Exception as e:
+            failures.append(f"{it['rel_path']}: {e}")
             try:
-                with tarfile.open(dest, "w:gz") as tar:
-                    tar.add(src, arcname=it["rel_path"])
-                shutil.rmtree(src)
-                moved.append(str(dest))
-            except Exception as e:
-                return "PRUNE", {"ok": False, "error": str(e)}
-    return "PRUNE (applied)", {"moved": moved}
+                dest.unlink(missing_ok=True)
+            except Exception:
+                pass
+    # hygiene always keeps the index honest after a mutation
+    orgindex.write_index(root, cfg)
+    res = {"moved": moved}
+    if failures:
+        res["ok"] = False
+        res["failures"] = failures
+    return "PRUNE", res
+
+
+def _archives(root: Path) -> list[Path]:
+    archive_dir = root / "_archive"
+    if not archive_dir.is_dir():
+        return []
+    return sorted(archive_dir.glob("*.tar.gz"), key=lambda p: p.name)
+
+
+def cmd_restore(name: str) -> tuple:
+    """Unpack the most recent _archive/<name>-*.tar.gz back to its original path.
+
+    Deletes the tarball only after a fully successful extraction (the entry is
+    live again). If the target path already exists it is not overwritten.
+    """
+    root = _root()
+    name = (name or "").strip()
+    if not name:
+        return "RESTORE", {"ok": False, "error": "Usage: restore <name>"}
+
+    matches = [p for p in _archives(root) if p.name.startswith(f"{name}-")]
+    if not matches:
+        return "RESTORE", {"ok": False, "error": f"no archived tarball for '{name}' in _archive/"}
+    pick = matches[-1]
+
+    # Predict the entry's directory so we never overwrite live work.
+    rel_dir = None
+    try:
+        with tarfile.open(pick, "r:gz") as tar:
+            members = tar.getmembers()
+            top = Path(next((m.name for m in members if m.name), "")).parts
+            if top:
+                rel_dir = str(Path(*top[:2]))  # e.g. "scratch/junk"
+    except Exception as e:
+        return "RESTORE", {"ok": False, "error": f"unreadable tarball {pick.name}: {e}"}
+
+    if rel_dir and (root / rel_dir).exists():
+        return "RESTORE", {"ok": False,
+                           "error": f"'{rel_dir}' already exists on disk — refusing to overwrite. "
+                                    f"Move or remove it, or inspect {pick.name} first."}
+
+    try:
+        with tarfile.open(pick, "r:gz") as tf:
+            for m in tf.getmembers():
+                target = (root / m.name).resolve()
+                if not str(target).startswith(str(root.resolve())) and target != root.resolve():
+                    raise ValueError(f"tarball member escapes workspace: {m.name}")
+            tf.extractall(root)
+        pick.unlink()
+    except Exception as e:
+        return "RESTORE", {"ok": False, "error": f"restore failed: {e}"}
+
+    orgindex.write_index(root, _root_config())
+    return "RESTORE", {"ok": True, "restored": rel_dir or name, "tarball": pick.name}
+
+
+def _root_config() -> dict:
+    return config.load_config(_root())
+
+
+def cmd_check() -> tuple:
+    """Drift check between the persisted index snapshot and what is on disk.
+
+    Reads the last-saved ``index.json`` (if any) and the current directory tree,
+    then reports: index records whose dir has vanished, directories on disk that
+    the index never saw, and absolute-path leaks in per-entry metadata (privacy
+    violations under strict mode).
+    """
+    root = _root()
+    cfg = config.load_config(root)
+    items = orgindex.build_items(root, cfg)
+    on_disk = orgws.list_entries(root, cfg)
+    disk_rel = {raw["rel_path"] for raw in on_disk}
+
+    # Detached (missing on disk but listed in the last-saved index snapshot).
+    saved: dict = {}
+    index_file = root / "index.json"
+    if index_file.exists():
+        try:
+            saved = json.loads(index_file.read_text(encoding="utf-8"))
+        except Exception:
+            saved = {}
+    saved_rel = {it.get("rel_path") for it in saved.get("items", []) if it.get("rel_path")}
+    missing_dirs = sorted(rp for rp in saved_rel if rp not in disk_rel)
+
+    # Unindexed (on disk in a live local index pass, not in the snapshot).
+    live_rel = {it["rel_path"] for it in items}
+    unindexed = sorted(rp for rp in disk_rel if rp not in live_rel)
+
+    # Privacy leaks inside per-entry metadata.
+    leaky = sorted(raw["rel_path"] for raw in on_disk
+                   if _meta_leaks_abs_path(config.load_meta(raw["dir"])))
+
+    statuses: dict[str, int] = {}
+    for it in items:
+        statuses[it["status"]] = statuses.get(it["status"], 0) + 1
+
+    report = {
+        "ok": not (missing_dirs or unindexed or leaky),
+        "indexed": len(items),
+        "on_disk": len(on_disk),
+        "missing_dirs": missing_dirs,
+        "unindexed": unindexed,
+        "privacy_leaks": leaky,
+        "status_counts": statuses,
+        "archives": [p.name for p in _archives(root)],
+    }
+    return "CHECK", report
+
+
+def _meta_leaks_abs_path(meta: dict) -> bool:
+    """True when any string value in meta is an absolute native path."""
+    blob = json.dumps(meta)
+    return bool(re.search(r'(?i)([a-z]:[\\/]|/(Users|home|root)/)', blob))
+
+
+def cmd_run(name: str) -> tuple:
+    """Run the entry_points recorded in <name>/.org.json (in the entry's dir)."""
+    root = _root()
+    target = None
+    for raw in orgws.list_entries(root):
+        if raw["name"] == name:
+            target = raw
+            break
+    if target is None:
+        return "RUN", {"ok": False, "error": f"no entry named '{name}' in workspace"}
+    meta = config.load_meta(target["dir"])
+    entry_points = meta.get("entry_points") or []
+    if not entry_points:
+        return "RUN", {"ok": False, "error": f"'{name}' has no entry_points recorded"}
+    results = []
+    for raw_cmd in entry_points:
+        try:
+            argv = shlex.split(raw_cmd)
+            proc = subprocess.run(argv, cwd=target["dir"], capture_output=True, text=True)
+            results.append({
+                "command": raw_cmd,
+                "exit": proc.returncode,
+                "stdout": (proc.stdout or "").strip()[:500],
+                "stderr": (proc.stderr or "").strip()[:500],
+            })
+        except Exception as e:
+            results.append({"command": raw_cmd, "exit": None, "error": str(e)})
+    ok = all(r.get("exit") == 0 for r in results)
+    return "RUN", {"ok": ok, "entry": name, "results": results}
 
 
 def cmd_show_config() -> tuple:
@@ -112,15 +292,11 @@ def _fmt(tag: str, data) -> str:
             elif isinstance(v, list) and v and isinstance(v[0], dict):
                 lines.append(f"- {k}:")
                 for it in v[:20]:
-                    line = f"  - `{it.get('rel_path', it.get('name', ''))}` [{it.get('status', '')}]"
-                    p = it.get("purpose", "")
-                    line += (f" — {p}" if p else "")
-                    if it.get("venvs"):
-                        venv_txt = ", ".join(
-                            f"{x['path']} ({x['version']})" if x.get("version") else x["path"]
-                            for x in it["venvs"])
-                        line += f" · venv: {venv_txt}"
-                    lines.append(line)
+                    lines.append(_fmt_entry_line(it, indent=2))
+            elif isinstance(v, list) and v:
+                lines.append(f"- {k}:")
+                for it in v[:20]:
+                    lines.append(f"  - {it}")
             else:
                 lines.append(f"- {k}: {v}")
     elif isinstance(data, str):
@@ -128,15 +304,35 @@ def _fmt(tag: str, data) -> str:
     elif isinstance(data, list):
         for it in data[:20]:
             if isinstance(it, dict):
-                line = f"- `{it.get('rel_path', it.get('name', ''))}` [{it.get('status', '')}]"
-                p = it.get("purpose", "")
-                line += (f" — {p}" if p else "")
-                if it.get("venvs"):
-                    venv_txt = ", ".join(
-                        f"{x['path']} ({x['version']})" if x.get("version") else x["path"]
-                        for x in it["venvs"])
-                    line += f" · venv: {venv_txt}"
-                lines.append(line)
+                lines.append(_fmt_entry_line(it, indent=0))
             else:
                 lines.append(f"- {it}")
     return "\n".join(lines)
+
+
+def _fmt_entry_line(it: dict, indent: int = 0) -> str:
+    """Format one list item (index entry, run result, or archive plan) on a line."""
+    pad = "  " * indent
+    if "command" in it:  # cmd_run result
+        line = f"{pad}- `{it['command']}`"
+        line += f" [exit {it.get('exit')}]" if it.get("exit") is not None else " [failed to start]"
+        if it.get("stdout"):
+            line += f" → {it['stdout'][:200]}"
+        if it.get("stderr"):
+            line += f" ! {it['stderr'][:120]}"
+        return line
+    if "dest" in it:  # prune preview
+        line = f"{pad}- `{it.get('rel_path', it.get('name', ''))}` [{it.get('status', '')}]"
+        line += f" → {it['dest']}"
+        return line
+    line = f"{pad}- `{it.get('rel_path', it.get('name', ''))}` [{it.get('status', '')}]"
+    p = it.get("purpose", "")
+    line += (f" — {p}" if p else "")
+    if it.get("entry_points"):
+        line += f" · entry: {', '.join(it['entry_points'])}"
+    if it.get("venvs"):
+        venv_txt = ", ".join(
+            f"{x['path']} ({x['version']})" if x.get("version") else x["path"]
+            for x in it["venvs"])
+        line += f" · venv: {venv_txt}"
+    return line

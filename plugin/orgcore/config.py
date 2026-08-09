@@ -106,3 +106,15 @@ def config_path(root: Path) -> Path:
 def meta_path(entry_dir: Path) -> Path:
     """Per-entry metadata file (`.org.json` inside the entry folder)."""
     return entry_dir / META_FILENAME
+
+
+def load_meta(entry_dir: Path) -> dict:
+    """Load an entry's `.org.json` metadata; {} when missing or corrupt."""
+    p = meta_path(entry_dir)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}

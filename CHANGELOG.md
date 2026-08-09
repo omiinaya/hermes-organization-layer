@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.0] - 2026-08-09
+
+Lifecycle and drift tooling.
+
+- **`org restore <name>`** — unpack the most recent `_archive/<name>-*.tar.gz` back to its
+  original workspace path. Refuses to overwrite an existing live directory; deletes the
+  tarball only after a fully successful extraction; refreshes the index.
+- **`org prune` dry-run preview** — now shows the exact tarballs that WOULD be created
+  (rel_path, status, destination path), and distinguishes flagged-only entries from the
+  ones that would actually move under the current policy (expired-scratch always; stale
+  only under `stale_policy: auto`).
+- **`org check`** — drift check: compares the persisted index snapshot to disk (detached
+  records, unindexed dirs) and flags absolute-path leaks in per-entry metadata
+  (privacy violations under strict mode). Also lists `_archive/` contents.
+- **`org run <name>`** — execute the `entry_points` recorded in an entry's `.org.json`,
+  from the entry's directory, reporting exit code / stdout / stderr per command.
+- Index is now regenerated automatically after `prune --apply` and `restore` mutations,
+  so INDEX.md never lists entries that were archived away (or misses restored ones).
+- New agent tools: `org_check`, `org_restore`, `org_run` (total 9).
+- **CI (GitHub Actions)** — pytest on ubuntu/macos/windows × Python 3.10/3.11/3.12 plus a
+  dedicated privacy-invariant step (no absolute paths in index artifacts).
+
 ## [0.1.1] - 2026-08-09
 
 Public-readiness hardening.

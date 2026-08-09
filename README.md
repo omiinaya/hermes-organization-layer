@@ -19,7 +19,8 @@ cross-platform (Windows / macOS / Linux), English-only.
   entry_points; optional explicit `venvs`).
 - **Hygiene** — `flag` policy (default): stale (>90 days idle) and expired-scratch (>30 days)
   are flagged in the index, nothing is deleted. `auto` policy + `org prune --apply` archives
-  candidates into `_archive/` as tarballs. Deletion is always explicit.
+  candidates into `_archive/` as tarballs — and `org restore <name>` unpacks one back.
+  `org check` reports drift between the index and disk. Deletion is always explicit.
 
 ## Install
 
@@ -36,13 +37,39 @@ hermes plugins install omiinaya/hermes-organization-layer --enable
 /org new projects my-app "short purpose"
 /org find proxy
 /org status
-/org prune                   dry-run hygiene report
+/org check                   drift check: index vs disk, privacy leaks
+/org prune                   dry-run: previews the exact tarballs that would be created
 /org prune --apply           archive stale/expired entries into _archive/
+/org restore my-app          unpack the newest my-app tarball back into the workspace
+/org run my-app              run the entry_points recorded in my-app/.org.json
 /org config                  show resolved configuration
 ```
 
 The same operations are exposed as agent tools: `org_init`, `org_index`, `org_new`,
-`org_find`, `org_status`, `org_prune`.
+`org_find`, `org_status`, `org_check`, `org_prune`, `org_restore`, `org_run`.
+
+## Entry points
+
+Record commands in an entry's `.org.json` and run them from that entry's directory:
+
+```json
+{
+  "name": "relay",
+  "kind": "projects",
+  "entry_points": ["python -m pytest tests/ -q", "python -m relay"]
+}
+```
+
+`org run relay` executes each entry point in order (working directory = the entry's
+folder) and reports the exit code, stdout, and stderr of each.
+
+## Archive lifecycle
+
+1. `org prune --apply` tars an eligible entry into `_archive/<name>-<stamp>.tar.gz` and
+   removes the live directory. The index is refreshed automatically.
+2. `org restore <name>` unpacks the most recent matching tarball back to its original
+   path, refreshes the index, and deletes the tarball only after a fully successful
+   extraction. It refuses to overwrite an existing live directory.
 
 ## Configuration
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -135,3 +137,123 @@ def test_privacy_full_opt_out_restores_abs_path(ws):
     jd = json.loads((ws / "index.json").read_text())
     assert jd["privacy"] == "full"
     assert jd["workspace"] == str(ws)  # explicit opt-out documents the trade-off
+
+
+# -- archive lifecycle: prune -> restore -----------------------------------
+
+def _age_scratch(ws: Path, name: str) -> None:
+    """Backdate an entry's mtime so scratch_ttl_days (30) flags it expired."""
+    old = 40 * 86400
+    for p in (ws / "scratch" / name).rglob("*"):
+        try:
+            os.utime(p, (p.stat().st_mtime - old, p.stat().st_mtime - old))
+        except OSError:
+            pass
+    root = ws / "scratch" / name
+    try:
+        os.utime(root, (root.stat().st_mtime - old, root.stat().st_mtime - old))
+    except OSError:
+        pass
+
+
+def test_prune_dry_run_previews_exact_tarballs(ws):
+    actions.cmd_new("scratch", "junk")
+    _age_scratch(ws, "junk")
+    tag, data = actions.cmd_prune(apply=False)
+    assert tag == "PRUNE (dry-run)"
+    assert len(data["would_archive"]) == 1
+    plan = data["would_archive"][0]
+    assert plan["rel_path"] == "scratch/junk"
+    assert plan["dest"].endswith(".tar.gz")
+    assert "_archive" in plan["dest"]
+    # nothing changed on disk
+    assert (ws / "scratch" / "junk").is_dir()
+
+
+def test_prune_apply_archives_and_refreshes_index(ws):
+    actions.cmd_new("scratch", "junk")
+    _age_scratch(ws, "junk")
+    tag, data = actions.cmd_prune(apply=True)
+    assert tag == "PRUNE"
+    assert len(data["moved"]) == 1
+    assert not (ws / "scratch" / "junk").exists()
+    assert Path(data["moved"][0]).is_file()
+    # index regenerated after the mutation: entry gone from it
+    jd = json.loads((ws / "index.json").read_text())
+    assert all(it["name"] != "junk" for it in jd["items"])
+
+
+def _archive_junk(ws: Path) -> Path:
+    actions.cmd_new("scratch", "junk")
+    _age_scratch(ws, "junk")
+    tag, data = actions.cmd_prune(apply=True)
+    assert tag == "PRUNE"
+    return Path(data["moved"][0])
+
+
+def test_restore_unpacks_archived_entry(ws):
+    tarball = _archive_junk(ws)
+    tag, data = actions.cmd_restore("junk")
+    assert tag == "RESTORE"
+    assert data["ok"]
+    assert (ws / "scratch" / "junk" / "README.md").exists()
+    assert not tarball.exists()  # tarball consumed by a successful restore
+    # index refreshed again: entry is back
+    jd = json.loads((ws / "index.json").read_text())
+    assert any(it["name"] == "junk" for it in jd["items"])
+
+
+def test_restore_refuses_when_target_exists(ws):
+    tarball = _archive_junk(ws)
+    (ws / "scratch" / "junk").mkdir()  # recreate the live dir
+    tag, data = actions.cmd_restore("junk")
+    assert not data["ok"]
+    assert "refusing to overwrite" in data["error"]
+    assert tarball.exists()  # untouched on failure
+
+
+def test_restore_unknown_name(ws):
+    tag, data = actions.cmd_restore("nope")
+    assert not data["ok"]
+
+
+# -- drift check -----------------------------------------------------------
+
+def test_check_reports_drift(ws):
+    actions.cmd_new("projects", "app")
+    tag, data = actions.cmd_check()
+    assert data["ok"] is True
+    assert data["indexed"] >= 1
+    # simulate an entry whose dir vanishes behind the index's back
+    shutil.rmtree(ws / "projects" / "app")
+    tag, data = actions.cmd_check()
+    assert not data["ok"]
+    assert any("projects/app" in rp for rp in data["missing_dirs"] + data["unindexed"])
+
+
+def test_check_flags_privacy_leaks_in_meta(ws):
+    actions.cmd_new("projects", "app")
+    (ws / "projects" / "app" / ".org.json").write_text(
+        json.dumps({"name": "app", "kind": "projects", "notes": "/root/secret-box"}))
+    tag, data = actions.cmd_check()
+    assert "projects/app" in data["privacy_leaks"]
+
+
+# -- entry_points ----------------------------------------------------------
+
+def test_run_executes_entry_points(ws):
+    actions.cmd_new("projects", "echoer")
+    meta = config.load_meta(ws / "projects" / "echoer")
+    meta["entry_points"] = [sys.executable + " -c \"print('hi from echoer')\""]
+    config.meta_path(ws / "projects" / "echoer").write_text(json.dumps(meta))
+    tag, data = actions.cmd_run("echoer")
+    assert data["ok"]
+    assert data["results"][0]["exit"] == 0
+    assert "hi from echoer" in data["results"][0]["stdout"]
+
+
+def test_run_missing_entry_points(ws):
+    actions.cmd_new("projects", "quiet")
+    tag, data = actions.cmd_run("quiet")
+    assert not data["ok"]
+    assert "no entry_points" in data["error"]

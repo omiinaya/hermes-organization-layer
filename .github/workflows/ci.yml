@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }} / py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install test dependency
+        run: python -m pip install --quiet pytest
+
+      - name: Run the orgcore test suite
+        run: python -m pytest tests/ -q
+
+      - name: Privacy invariant (no absolute paths in index artifacts)
+        shell: python
+        run: |
+          import json, os, subprocess, sys, tempfile
+          from pathlib import Path
+          repo = Path.cwd()
+          with tempfile.TemporaryDirectory(prefix="ci-org-") as td:
+              os.environ["HERMES_ORG_WORKSPACE"] = td
+              sys.path.insert(0, str(repo / "plugin"))
+              from orgcore import actions
+              actions.cmd_init()
+              actions.cmd_new("projects", "demo", "CI smoke", tags=["ci"])
+              md = (Path(td) / "INDEX.md").read_text()
+              jd = json.loads((Path(td) / "index.json").read_text())
+              assert td not in md and td not in json.dumps(jd), "absolute path leaked"
+              assert jd["privacy"] == "strict" and jd["workspace"] == Path(td).name
+              assert not jd["items"][0]["rel_path"].startswith(("/", "C:", "D:"))
+          print("privacy invariant OK")

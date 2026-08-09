@@ -4,8 +4,9 @@ Keeps a Hermes workspace tidy and findable: a canonical cross-platform folder la
 a generated INDEX.md + index.json, per-entry metadata, and a stale/scratch hygiene policy.
 
 Usage (slash):  /org init | index | new <kind> <name> [purpose...] | find <q> | status
-                | prune [--apply] | config | help
-Tools:          org_init, org_index, org_new, org_find, org_status, org_prune
+                | check | prune [--apply] | restore <name> | run <name> | config | help
+Tools:          org_init, org_index, org_new, org_find, org_status, org_check,
+                org_prune, org_restore, org_run
 """
 
 from __future__ import annotations
@@ -19,7 +20,10 @@ HELP = (
     "  `/org new <kind> <name> [purpose...]`- create a managed entry (.org.json stub)\n"
     "  `/org find <query>`                  - search the index by name/purpose/tag\n"
     "  `/org status`                        - overview + stale/expired flags\n"
-    "  `/org prune [--apply]`               - dry-run (default) or archive stale/expired\n"
+    "  `/org check`                         - drift check (index vs disk, privacy leaks)\n"
+    "  `/org prune [--apply]`               - dry-run preview (default) or archive stale/expired\n"
+    "  `/org restore <name>`                - unpack an entry back out of _archive/\n"
+    "  `/org run <name>`                    - run the entry_points recorded for an entry\n"
     "  `/org config`                        - show resolved config\n"
     "  `/org help`                          - this message\n"
     "\nKinds: projects, test-scripts, scratch, data, notes, docs, assets.\n"
@@ -52,8 +56,17 @@ def _handle_slash(raw_args: str) -> str:
         return actions._fmt(*actions.cmd_find(rest))
     if cmd in ("status", "ls", "list", "stats"):
         return actions._fmt(*actions.cmd_status())
+    if cmd in ("check", "audit", "doctor"):
+        return actions._fmt(*actions.cmd_check())
     if cmd in ("prune", "gc"):
         return actions._fmt(*actions.cmd_prune(apply="--apply" in args[1:]))
+    if cmd in ("restore", "unarchive", "recover"):
+        return actions._fmt(*actions.cmd_restore(rest))
+    if cmd in ("run", "go", "launch", "exec"):
+        names = rest.split()
+        if not names:
+            return "Usage: /org run <name>  — run the entry_points recorded in <name>/.org.json"
+        return actions._fmt(*actions.cmd_run(names[0]))
     if cmd in ("config", "show"):
         return actions._fmt(*actions.cmd_show_config())
     if cmd in ("help", "?"):
@@ -85,8 +98,20 @@ def _t_status(args: dict) -> str:
     return actions._fmt(*actions.cmd_status())
 
 
+def _t_check(args: dict) -> str:
+    return actions._fmt(*actions.cmd_check())
+
+
 def _t_prune(args: dict) -> str:
     return actions._fmt(*actions.cmd_prune(apply=bool(args.get("apply", False))))
+
+
+def _t_restore(args: dict) -> str:
+    return actions._fmt(*actions.cmd_restore(args.get("name", "")))
+
+
+def _t_run(args: dict) -> str:
+    return actions._fmt(*actions.cmd_run(args.get("name", "")))
 
 
 _TOOL_SPECS = [
@@ -101,12 +126,19 @@ _TOOL_SPECS = [
      {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}),
     ("org_status", "Show workspace summary plus stale/expired flags.",
      {"type": "object", "properties": {}}),
-    ("org_prune", "Hygiene: with apply=false (default) lists archive candidates; with apply=true moves stale/expired entries to _archive/.",
+    ("org_check", "Drift check: compares the workspace index to what is on disk (missing dirs, unindexed entries, privacy leaks in metadata).",
+     {"type": "object", "properties": {}}),
+    ("org_prune", "Hygiene: with apply=false (default) previews the exact tarballs that would be created; with apply=true archives stale/expired entries into _archive/.",
      {"type": "object", "properties": {"apply": {"type": "boolean", "description": "Set true to actually archive candidates."}}, "additionalProperties": False}),
+    ("org_restore", "Unpack the most recent _archive/<name>-*.tar.gz back to its original workspace path.",
+     {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False}),
+    ("org_run", "Run the entry_points recorded in an entry's .org.json, from that entry's directory.",
+     {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False}),
 ]
 
 _HANDLERS = {"org_init": _t_init, "org_index": _t_index, "org_new": _t_new,
-             "org_find": _t_find, "org_status": _t_status, "org_prune": _t_prune}
+             "org_find": _t_find, "org_status": _t_status, "org_check": _t_check,
+             "org_prune": _t_prune, "org_restore": _t_restore, "org_run": _t_run}
 
 
 def register(ctx) -> None:
