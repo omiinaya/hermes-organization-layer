@@ -18,8 +18,12 @@ Production-hardening pass.
   previews, capabilities, profiles, venvs) and the feature gate. Suite: 36 tests,
   ~84% line coverage.
 - **plugin.yaml** description now reflects the full feature set (was stale).
+- **Python 3.14 readiness**: restore now uses `tarfile.extractall(filter="data")`
+  on Python 3.12+ (flagged by CI's DeprecationWarning).
 - Backup/checkpoint rehearsal: a real `hermes backup` zip was created, integrity-tested,
   and verified to restore (config.yaml + state.db present).
+- **CI verified green** on the self-hosted runner: 36 passed + register() 13 tools +
+  privacy invariant.
 
 ## [0.3.0] - 2026-08-09
 

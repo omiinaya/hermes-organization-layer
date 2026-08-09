@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,9 @@ from . import features as orgfeatures
 from . import index as orgindex
 from . import profiles as orgprofiles
 from . import workspace as orgws
+
+# Python 3.12+ supports tarfile.extractall(filter=...) for safe extraction.
+_supports_filter = sys.version_info >= (3, 12)
 
 
 def _root() -> Path:
@@ -229,7 +233,10 @@ def cmd_restore(name: str) -> tuple:
                 target = (root / m.name).resolve()
                 if not str(target).startswith(str(root.resolve())) and target != root.resolve():
                     raise ValueError(f"tarball member escapes workspace: {m.name}")
-            tf.extractall(root)
+            kwargs = {}
+            if hasattr(tf, "extractall") and _supports_filter:
+                kwargs["filter"] = "data"  # Python 3.12+ safe extraction (rejects device files, etc.)
+            tf.extractall(root, **kwargs)
         pick.unlink()
     except Exception as e:
         return "RESTORE", {"ok": False, "error": f"restore failed: {e}"}

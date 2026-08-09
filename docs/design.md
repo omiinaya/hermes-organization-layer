@@ -71,6 +71,8 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
 - Config is a documented JSON file; example in `workspace-skel/` (incl. a
   `.gitignore.example` template for git-backed workspaces).
 - Tests (pytest) cover core behavior; English-only strings.
-- CI (GitHub Actions) runs the suite on Windows/macOS/Linux × Python 3.10–3.12 and
-  enforces the privacy invariant as a dedicated step.
+- CI (GitHub Actions) runs the suite on a **self-hosted runner** (LXC 100 /
+  pve-scripts-local, `pve-scripts-runner`) using its provisioned `/opt/org-ci-venv`
+  (Python 3.13 + pytest) — tests + register() surface + a dedicated privacy-invariant
+  step. Not reliant on hosted-runners budget.
 - MIT license; CHANGELOG kept; repo renamed/visible when public.
