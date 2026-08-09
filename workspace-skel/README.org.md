@@ -30,6 +30,7 @@ Every managed entry carries a `.org.json` metadata file:
   "tags": ["tag1", "tag2"],
   "status": "active",
   "entry_points": ["README.md", "src/main.py"],
+  "venvs": [],                      # optional: [{"path": ".venv", "version": "3.12"}]
   "created": "2026-08-09T00:00:00Z",
   "notes": ""
 }

@@ -12,8 +12,11 @@ cross-platform (Windows / macOS / Linux), English-only.
 - **Workspace scaffold** — one default layout for all artifacts:
   `projects/`, `test-scripts/`, `scratch/`, `data/`, `notes/`, `docs/`, `assets/`, `_archive/`.
 - **Index** — `org index` writes `INDEX.md` (human) + `index.json` (machine) listing what
-  exists, where, its purpose, tags, status, and last activity. Hidden/dep dirs are never indexed.
-- **Metadata** — every entry has a small `.org.json` (name, kind, purpose, tags, status, entry_points).
+  exists, where, its purpose, tags, status, last activity, and — crucially — any Python
+  **virtual environments** (venv paths + Python version) so you (and the agent) always use
+  the correct interpreter. Hidden/dep dirs are never indexed.
+- **Metadata** — every entry has a small `.org.json` (name, kind, purpose, tags, status,
+  entry_points; optional explicit `venvs`).
 - **Hygiene** — `flag` policy (default): stale (>90 days idle) and expired-scratch (>30 days)
   are flagged in the index, nothing is deleted. `auto` policy + `org prune --apply` archives
   candidates into `_archive/` as tarballs. Deletion is always explicit.

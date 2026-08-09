@@ -21,6 +21,7 @@ def _default_meta(kind: str, name: str) -> dict:
         "tags": [],
         "status": "active",          # active | stale | scratch | archived
         "entry_points": [],
+        "venvs": [],                 # optional explicit list: [{"path": ".venv", "version": "3.12"}]
         "created": utcnow(),
         "notes": "",
     }

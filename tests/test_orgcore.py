@@ -77,3 +77,22 @@ def test_excludes_never_indexed(ws):
 
 def test_cross_platform_default_root_returns_path():
     assert config.default_workspace_root().is_absolute()
+
+
+def test_index_records_venv_for_entry(ws):
+    actions.cmd_new("projects", "weba")
+    proj = ws / "projects" / "weba"
+    (proj / ".venv").mkdir()
+    (proj / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\nversion = 3.12.1\n")
+    items = index.build_items(ws, config.load_config(ws))
+    it = next(x for x in items if x["name"] == "weba")
+    assert it["venvs"] == [{"path": ".venv", "version": "3.12.1"}]
+
+
+def test_explicit_venv_meta_wins(ws):
+    actions.cmd_new("projects", "legacy")
+    (ws / "projects" / "legacy" / ".org.json").write_text(
+        json.dumps({"name": "legacy", "kind": "projects", "venvs": [{"path": "custom-env", "version": "3.9"}]}))
+    items = index.build_items(ws, config.load_config(ws))
+    it = next(x for x in items if x["name"] == "legacy")
+    assert any(v["path"] == "custom-env" and v["version"] == "3.9" for v in it["venvs"])

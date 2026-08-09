@@ -115,6 +115,11 @@ def _fmt(tag: str, data) -> str:
                     line = f"  - `{it.get('rel_path', it.get('name', ''))}` [{it.get('status', '')}]"
                     p = it.get("purpose", "")
                     line += (f" — {p}" if p else "")
+                    if it.get("venvs"):
+                        venv_txt = ", ".join(
+                            f"{x['path']} ({x['version']})" if x.get("version") else x["path"]
+                            for x in it["venvs"])
+                        line += f" · venv: {venv_txt}"
                     lines.append(line)
             else:
                 lines.append(f"- {k}: {v}")

@@ -60,6 +60,53 @@ def _dir_size(entry: Path) -> int:
     return total
 
 
+# -- venv detection ---------------------------------------------------------
+# A directory containing `pyvenv.cfg` is a Python virtual environment.
+# We scan the entry root plus two levels of subdirectories (bounded, so huge
+# project trees stay cheap) and record each venv's relative path + Python version.
+
+def _pyvenv_version(pyvenv_cfg: Path) -> str:
+    try:
+        for line in pyvenv_cfg.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("version") and "=" in line:
+                return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _scan_venvs(dir_path: Path, rel: str, depth: int, max_depth: int, out: list) -> None:
+    if depth > max_depth:
+        return
+    try:
+        for child in sorted(dir_path.iterdir()):
+            if child.name in ("node_modules", "__pycache__"):
+                continue
+            if child.name.startswith(".") and child.name != ".venv":
+                continue
+            if child.is_dir():
+                _scan_venvs(child, f"{rel}/{child.name}" if rel else child.name, depth + 1, max_depth, out)
+            elif child.name == "pyvenv.cfg":
+                out.append({"path": rel or ".", "version": _pyvenv_version(child)})
+    except OSError:
+        pass
+
+
+def detect_venvs(entry: Path, max_depth: int = 2) -> list[dict]:
+    out: list[dict] = []
+    _scan_venvs(entry, "", 0, max_depth, out)
+    return out
+
+
+def merge_venvs(detected: list[dict], explicit: list) -> list[dict]:
+    """Explicit .org.json `venvs` entries win; auto-detected ones fill gaps."""
+    by_path = {str(v.get("path", "")): v for v in explicit if isinstance(v, dict) and v.get("path")}
+    for v in detected:
+        by_path.setdefault(str(v.get("path", "")), v)
+    return list(by_path.values())
+
+
 def build_items(root: Path, cfg: dict) -> list[dict]:
     policy = cfg["policy"]
     items: list[dict] = []
@@ -93,6 +140,7 @@ def build_items(root: Path, cfg: dict) -> list[dict]:
             "status": status,
             "last_activity": _entry_mtime_iso(entry),
             "entry_points": meta.get("entry_points", []) or [],
+            "venvs": merge_venvs(detect_venvs(entry), meta.get("venvs") or []),
             "size_bytes": _dir_size(entry),
         })
     return items
@@ -145,6 +193,10 @@ def render_markdown(items: list[dict], cfg: dict) -> str:
                 lines.append(f"  tags: {', '.join(it['tags'])}")
             if it.get("entry_points"):
                 lines.append(f"  entry: {', '.join(it['entry_points'])}")
+            if it.get("venvs"):
+                venv_txt = " · ".join(f"{v['path']} ({v['version']})" if v.get("version")
+                                      else v["path"] for v in it["venvs"])
+                lines.append(f"  venv: {venv_txt}")
         lines.append("")
 
     flagged = [it for it in items if it["status"] in ("stale", "expired-scratch")]
