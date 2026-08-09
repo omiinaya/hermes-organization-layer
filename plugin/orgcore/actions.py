@@ -50,6 +50,7 @@ def cmd_profiles() -> tuple:
     """List registered Hermes profiles with their routing metadata."""
     root = _root()
     cfg = config.load_config(root)
+    _maybe_refresh_index(root, cfg)  # keep the index honest before listing
     reg = orgprofiles.register(root, cfg)  # ensure all live profiles are present
     items = []
     for raw in orgws.list_entries(root, cfg):
@@ -105,6 +106,7 @@ def cmd_new(kind: str, name: str, purpose: str = "", tags: list[str] | None = No
 def cmd_status() -> tuple:
     root = _root()
     cfg = config.load_config(root)
+    _maybe_refresh_index(root, cfg)
     items = orgindex.build_items(root, cfg)
     counts: dict[str, int] = {}
     for it in items:
@@ -113,14 +115,86 @@ def cmd_status() -> tuple:
     return "STATUS", {"workspace": str(root), "total": len(items), "counts": counts, "flagged": flagged}
 
 
-def cmd_find(query: str) -> tuple:
+def _find_entry(root: Path, name: str) -> dict | None:
+    """Locate a managed entry by name (first match across kinds)."""
+    for raw in orgws.list_entries(root):
+        if raw["name"] == name:
+            return raw
+    return None
+
+
+def _run_entry(root: Path, name: str) -> dict:
+    """Run the entry_points recorded in <name>/.org.json (in the entry's dir).
+
+    Shared by /org run and /org find --run. Returns a result dict suitable for
+    the _fmt RUN renderer.
+    """
+    target = _find_entry(root, name)
+    if target is None:
+        return {"ok": False, "error": f"no entry named '{name}' in workspace"}
+    meta = config.load_meta(target["dir"])
+    entry_points = meta.get("entry_points") or []
+    if not entry_points:
+        return {"ok": False, "error": f"'{name}' has no entry_points recorded"}
+    results = []
+    for raw_cmd in entry_points:
+        try:
+            argv = shlex.split(raw_cmd)
+            proc = subprocess.run(argv, cwd=target["dir"], capture_output=True, text=True)
+            results.append({
+                "command": raw_cmd,
+                "exit": proc.returncode,
+                "stdout": (proc.stdout or "").strip()[:500],
+                "stderr": (proc.stderr or "").strip()[:500],
+            })
+        except Exception as e:
+            results.append({"command": raw_cmd, "exit": None, "error": str(e)})
+    ok = all(r.get("exit") == 0 for r in results)
+    return {"ok": ok, "entry": name, "results": results}
+
+
+def _index_is_stale(root: Path, cfg: dict) -> bool:
+    """True when index.json is missing or older than the newest on-disk entry.
+
+    Lets convenience reads (find/status/check/profiles) transparently refresh a
+    stale index so the agent never has to remember `org index` by hand.
+    """
+    index_file = root / "index.json"
+    if not index_file.exists():
+        return True
+    try:
+        index_mtime = index_file.stat().st_mtime
+    except OSError:
+        return True
+    for raw in orgws.list_entries(root, cfg):
+        mtime = orgindex._entry_mtime_float(raw["dir"])  # entry root + 1 level
+        if mtime > index_mtime:
+            return True
+    return False
+
+
+def _maybe_refresh_index(root: Path, cfg: dict) -> bool:
+    """Rebuild the index when stale; returns True if a refresh happened."""
+    if not _index_is_stale(root, cfg):
+        return False
+    orgprofiles.register(root, cfg)
+    orgindex.write_index(root, cfg)
+    return True
+
+
+def cmd_find(query: str, auto: bool = False) -> tuple:
     root = _root()
     cfg = config.load_config(root)
+    _maybe_refresh_index(root, cfg)  # implicit refresh: search latest disk state
     items = orgindex.build_items(root, cfg)
     q = query.strip().lower()
     hits = [it for it in items
             if q in it["name"].lower() or q in it["purpose"].lower()
             or any(q in t.lower() for t in it["tags"])]
+    if auto and hits:
+        # Convenience: auto-run the top hit's recorded entry_points.
+        run = _run_entry(root, hits[0]["name"])
+        return "FIND", {"hits": hits, "auto_ran": run}
     return "FIND", hits
 
 
@@ -307,33 +381,7 @@ def _meta_leaks_abs_path(meta: dict) -> bool:
 
 def cmd_run(name: str) -> tuple:
     """Run the entry_points recorded in <name>/.org.json (in the entry's dir)."""
-    root = _root()
-    target = None
-    for raw in orgws.list_entries(root):
-        if raw["name"] == name:
-            target = raw
-            break
-    if target is None:
-        return "RUN", {"ok": False, "error": f"no entry named '{name}' in workspace"}
-    meta = config.load_meta(target["dir"])
-    entry_points = meta.get("entry_points") or []
-    if not entry_points:
-        return "RUN", {"ok": False, "error": f"'{name}' has no entry_points recorded"}
-    results = []
-    for raw_cmd in entry_points:
-        try:
-            argv = shlex.split(raw_cmd)
-            proc = subprocess.run(argv, cwd=target["dir"], capture_output=True, text=True)
-            results.append({
-                "command": raw_cmd,
-                "exit": proc.returncode,
-                "stdout": (proc.stdout or "").strip()[:500],
-                "stderr": (proc.stderr or "").strip()[:500],
-            })
-        except Exception as e:
-            results.append({"command": raw_cmd, "exit": None, "error": str(e)})
-    ok = all(r.get("exit") == 0 for r in results)
-    return "RUN", {"ok": ok, "entry": name, "results": results}
+    return "RUN", _run_entry(_root(), name)
 
 
 def cmd_show_config() -> tuple:
@@ -348,7 +396,12 @@ def _fmt(tag: str, data) -> str:
             if isinstance(v, dict):
                 lines.append(f"- {k}:")
                 for kk, vv in v.items():
-                    lines.append(f"  - {kk}: {vv}")
+                    if isinstance(vv, list) and vv and isinstance(vv[0], dict):
+                        lines.append(f"  - {kk}:")
+                        for it in vv[:20]:
+                            lines.append(_fmt_entry_line(it, indent=2))
+                    else:
+                        lines.append(f"  - {kk}: {vv}")
             elif isinstance(v, list) and v and isinstance(v[0], dict):
                 lines.append(f"- {k}:")
                 for it in v[:20]:

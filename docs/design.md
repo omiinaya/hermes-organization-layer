@@ -28,7 +28,10 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
 5. **Agent tooling** — a Hermes plugin exposes `/org` slash commands and `org_*` agent
    tools so the agent itself routes work into the right folders and refreshes the index
    as part of its normal workflow (clone -> projects/, scratch script -> test-scripts/,
-   session end -> index).
+   session end -> index). Convenience: `find --run` launches the top hit's entry_points,
+   and read commands (`find`/`status`/`profiles`) transparently refresh a stale index
+   so it never lags the workspace; `check` stays the honest drift detector (it compares
+   the *persisted* snapshot, so it never auto-refreshes).
 
 ## Decisions (locked with the user)
 

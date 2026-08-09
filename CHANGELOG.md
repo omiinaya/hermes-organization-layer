@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0] - 2026-08-09
+
+Convenience pass (last roadmap item — P4).
+
+- **`org find --run`** (also `org_find` with `auto=true`): finds the top matching
+  entry and auto-runs its recorded `entry_points` in one step — the "find and
+  launch" flow. Run logic is now a shared `_run_entry()` helper used by both
+  `org run` and `org find --run` (single implementation, no drift).
+- **Implicit index refresh**: `find`, `status`, and `profiles` now detect a stale
+  index (newer on-disk entry than `index.json`) and rebuild it transparently —
+  the index can never silently lag the workspace. `check` deliberately does NOT
+  auto-refresh: its whole job is comparing the *persisted* snapshot against disk,
+  so it stays the honest drift detector.
+- Display layer: nested run-results render through the entry-line formatter
+  (exit codes + stdout) instead of raw dict dumps.
+- Suite: 43 tests (was 36).
+
 ## [0.4.0] - 2026-08-09
 
 Production-hardening pass.

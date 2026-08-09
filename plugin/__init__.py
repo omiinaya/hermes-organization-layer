@@ -29,6 +29,7 @@ HELP = (
     "  `/org index`                         - regenerate INDEX.md + index.json\n"
     "  `/org new <kind> <name> [purpose...]`- create a managed entry (.org.json stub)\n"
     "  `/org find <query>`                  - search the index by name/purpose/tag\n"
+    "  `/org find <query> --run`            - find + auto-run the top hit's entry_points\n"
     "  `/org status`                        - overview + stale/expired flags\n"
     "  `/org check`                         - drift check (index vs disk, privacy leaks)\n"
     "  `/org prune [--apply]`               - dry-run preview (default) or archive stale/expired\n"
@@ -67,7 +68,14 @@ def _handle_slash(raw_args: str) -> str:
             return "Usage: /org new <kind> <name> [purpose...]\nKinds: " + ", ".join(_folders())
         return actions._fmt(*actions.cmd_new(parts[0], parts[1], " ".join(parts[2:])))
     if cmd in ("find", "search", "where"):
-        return actions._fmt(*actions.cmd_find(rest))
+        # optional trailing --run flag: auto-run the top hit's entry_points
+        find_args = rest
+        auto = False
+        parts = rest.split()
+        if parts and parts[-1].lower() in ("--run", "--auto", "-r"):
+            auto = True
+            find_args = " ".join(parts[:-1])
+        return actions._fmt(*actions.cmd_find(find_args, auto=auto))
     if cmd in ("status", "ls", "list", "stats"):
         return actions._fmt(*actions.cmd_status())
     if cmd in ("check", "audit", "doctor"):
@@ -131,7 +139,8 @@ def _t_new(args: dict) -> str:
 
 
 def _t_find(args: dict) -> str:
-    return actions._fmt(*actions.cmd_find(args.get("query", "")))
+    return actions._fmt(*actions.cmd_find(
+        args.get("query", ""), auto=bool(args.get("auto", False))))
 
 
 def _t_status(args: dict) -> str:
@@ -180,8 +189,10 @@ _TOOL_SPECS = [
      {"type": "object", "properties": {"kind": {"type": "string"}, "name": {"type": "string"},
                                        "purpose": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}},
       "required": ["kind", "name"], "additionalProperties": False}),
-    ("org_find", "Find workspace entries by name, purpose, or tag. Returns a matching hit list.",
-     {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}),
+    ("org_find", "Find workspace entries by name, purpose, or tag. Returns a matching hit list. With auto=true, also runs the top hit's recorded entry_points.",
+     {"type": "object", "properties": {"query": {"type": "string"},
+                                       "auto": {"type": "boolean", "description": "When true, run the top matching entry's entry_points (convenience)."}},
+      "required": ["query"], "additionalProperties": False}),
     ("org_status", "Show workspace summary plus stale/expired flags.",
      {"type": "object", "properties": {}}),
     ("org_check", "Drift check: compares the workspace index to what is on disk (missing dirs, unindexed entries, privacy leaks in metadata).",

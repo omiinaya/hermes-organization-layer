@@ -48,6 +48,7 @@ hermes plugins install omiinaya/hermes-organization-layer --enable
 /org index                   regenerate INDEX.md + index.json (auto-registers profiles)
 /org new projects my-app "short purpose"
 /org find proxy
+/org find proxy --run      find + auto-run the top hit's entry_points
 /org status
 /org check                   drift check: index vs disk, privacy leaks
 /org prune                   dry-run: previews the exact tarballs that would be created

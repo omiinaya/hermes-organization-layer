@@ -437,3 +437,60 @@ def test_fmt_entry_line_venv():
     line = actions._fmt_entry_line(
         {"rel_path": "proj", "status": "active", "venvs": [{"path": ".venv", "version": "3.12"}]})
     assert ".venv (3.12)" in line
+
+
+# -- P4 convenience: run-on-find + implicit index refresh -----------------------
+
+def test_find_auto_runs_entry_points(ws):
+    actions.cmd_new("test-scripts", "probe")
+    (ws / "test-scripts" / "probe" / ".org.json").write_text(json.dumps({
+        "name": "probe", "kind": "test-scripts",
+        "entry_points": [sys.executable + " -c \"import sys; print('RUN_OK')\""]}))
+    tag, data = actions.cmd_find("probe", auto=True)
+    assert isinstance(data, dict) and "hits" in data and "auto_ran" in data
+    assert data["auto_ran"]["ok"] is True
+    assert "RUN_OK" in data["auto_ran"]["results"][0]["stdout"]
+
+
+def test_find_auto_run_no_entry_points_reports_error(ws):
+    actions.cmd_new("notes", "note1")
+    tag, data = actions.cmd_find("note1", auto=True)
+    assert data["auto_ran"]["ok"] is False
+    assert "no entry_points" in data["auto_ran"]["error"]
+
+
+def test_find_auto_no_hits_returns_plain_list(ws):
+    tag, data = actions.cmd_find("nomatch", auto=True)
+    assert isinstance(data, list) and data == []
+
+
+def test_cmd_run_uses_shared_helper(ws):
+    actions.cmd_new("test-scripts", "probe2")
+    (ws / "test-scripts" / "probe2" / ".org.json").write_text(json.dumps({
+        "name": "probe2", "kind": "test-scripts",
+        "entry_points": [sys.executable + " -c \"import sys; print('ALSO_OK')\""]}))
+    tag, data = actions.cmd_run("probe2")
+    assert data["ok"] and "ALSO_OK" in data["results"][0]["stdout"]
+
+
+def test_stale_index_refreshed_on_find(ws):
+    # build a fresh index, then add an entry OUTSIDE the plugin and touch it so
+    # index.json becomes older than the newest on-disk entry
+    actions.cmd_new("projects", "one")
+    newdir = ws / "projects" / "injected"
+    newdir.mkdir()
+    (newdir / ".org.json").write_text(json.dumps({"name": "injected", "kind": "projects"}))
+    assert actions._index_is_stale(ws, config.load_config(ws)) is True
+    tag, hits = actions.cmd_find("injected")   # implicit refresh happens
+    assert any(h["name"] == "injected" for h in hits)
+    jd = json.loads((ws / "index.json").read_text())
+    assert any(it["rel_path"] == "projects/injected" for it in jd["items"])
+    assert actions._index_is_stale(ws, config.load_config(ws)) is False
+
+
+def test_fresh_index_not_refreshed_on_read(ws):
+    actions.cmd_new("projects", "app")
+    assert actions._index_is_stale(ws, config.load_config(ws)) is False
+    before = (ws / "index.json").read_text()
+    actions.cmd_find("app")
+    assert (ws / "index.json").read_text() == before  # no spurious rewrite
