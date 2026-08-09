@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -323,3 +324,105 @@ def test_set_profile_updates_routing(profws):
     assert tag == "PROFILE SET" and data["ok"]
     cur = json.loads((profws / "profiles" / "dev" / ".org.json").read_text())
     assert cur["when_to_use"] == "writing and building code"
+
+
+# -- feature-coverage gate -------------------------------------------------
+
+@pytest.fixture
+def features_fixed(tmp_path, monkeypatch):
+    """A fake HERMES_HOME with a recent backup + checkpoint + memory provider
+    so the gate reports READY (except the explicitly-off recommended items)."""
+    hh = tmp_path / ".hermes"
+    (hh / "checkpoints").mkdir(parents=True)
+    (hh / "checkpoints" / "cp-1").write_text("snapshot")
+    (hh / "config.yaml").write_text("memory:\n  provider: memory_tencentdb\n")
+    # a fresh, valid backup zip inside the fake HERMES_HOME
+    import zipfile
+    bzip = hh / "hermes-backup-20260801-000000.zip"
+    with zipfile.ZipFile(bzip, "w") as zf:
+        zf.writestr("config.yaml", "x")
+    monkeypatch.setenv("HERMES_HOME", str(hh))
+    return tmp_path
+
+
+def test_feature_gate_ready_when_critical_present(features_fixed):
+    os.utime(next(Path(features_fixed, ".hermes").glob("hermes-backup-*.zip")),
+             (time.time(), time.time()))
+    from orgcore import features
+    rep = features.probe(Path(features_fixed) / ".hermes", user_home=Path(features_fixed))
+    # critical all ok -> ready
+    crit = {c["capability"]: c["status"] for c in rep["capabilities"] if c["tier"] == "critical"}
+    assert set(crit) == {"backups", "checkpoints", "memory_provider"}
+    assert all(v == "ok" for v in crit.values()), crit
+    assert rep["ready"] is True
+
+
+def test_feature_gate_not_ready_without_backup(tmp_path, monkeypatch):
+    hh = tmp_path / ".hermes"
+    (hh / "checkpoints").mkdir(parents=True)
+    (hh / "checkpoints" / "cp-1").write_text("x")
+    (hh / "config.yaml").write_text("memory:\n  provider: memory_tencentdb\n")
+    monkeypatch.setenv("HERMES_HOME", str(hh))
+    from orgcore import features
+    rep = features.probe(hh, user_home=tmp_path)
+    b = next(c for c in rep["capabilities"] if c["capability"] == "backups")
+    assert b["status"] == "missing"
+    assert rep["ready"] is False
+
+
+def test_feature_gate_renders(features_fixed):
+    os.utime(next(Path(features_fixed, ".hermes").glob("hermes-backup-*.zip")),
+             (time.time(), time.time()))
+    tag, rep = actions.cmd_features()
+    text = actions._fmt(tag, rep)
+    assert "FEATURE GATE" in text
+    assert "backups" in text and "checkpoints" in text
+    assert text.splitlines()[0].startswith("**FEATURE GATE")
+
+
+def test_memory_provider_scoped_to_memory_block():
+    from orgcore import features
+    cfg = ("providers:\n    provider: custom:opencode-zen-free-proxied\n"
+           "memory:\n  provider: memory_tencentdb\n  backend: local\n")
+    assert features._memory_provider(cfg) == "memory_tencentdb"
+    assert features._memory_provider("providers:\n    provider: xyz\n") == ""
+
+
+# -- display layer (_fmt) -------------------------------------------------------
+
+def test_fmt_scalars_dict_list_str():
+    assert actions._fmt("T", {"a": 1, "b": "x"}) == "**T**\n- a: 1\n- b: x"
+    assert actions._fmt("T", "plain") == "**T**\nplain"
+    out = actions._fmt("T", ["c", "d"])
+    assert "- c" in out and "- d" in out
+
+
+def test_fmt_entry_line_run_result():
+    line = actions._fmt_entry_line({"command": "pytest", "exit": 0, "stdout": "ok"}, indent=1)
+    assert "`pytest`" in line and "exit 0" in line and "ok" in line
+    line = actions._fmt_entry_line({"command": "bogus", "exit": None})
+    assert "failed to start" in line
+
+
+def test_fmt_entry_line_prune_preview():
+    line = actions._fmt_entry_line({"rel_path": "x/y", "status": "stale", "dest": "/tmp/a.tar.gz"}, indent=0)
+    assert "→ /tmp/a.tar.gz" in line
+
+
+def test_fmt_entry_line_capability():
+    line = actions._fmt_entry_line(
+        {"capability": "backups", "status": "ok", "tier": "critical", "detail": "bk-1.zip", "hint": "refresh"}, indent=0)
+    assert "✓" in line and "backups" in line and "refresh" in line
+
+
+def test_fmt_entry_line_profile():
+    line = actions._fmt_entry_line(
+        {"name": "dev", "status": "active", "purpose": "code", "launch": "hermes -p dev",
+         "tools": [{"name": "pytest", "profile": "dev"}]}, indent=0)
+    assert "dev" in line and "hermes -p dev" in line and "pytest" in line
+
+
+def test_fmt_entry_line_venv():
+    line = actions._fmt_entry_line(
+        {"rel_path": "proj", "status": "active", "venvs": [{"path": ".venv", "version": "3.12"}]})
+    assert ".venv (3.12)" in line

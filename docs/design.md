@@ -56,6 +56,9 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
   prune, and privacy machinery. Profiles are auto-registered from live Hermes wiring
   (`$HERMES_HOME/profiles/*` + the active home), never hardcoded. Absolute home paths
   are deliberately not persisted (strict privacy).
+- **Feature gate reads live wiring too**: `features.py` probes `$HERMES_HOME` state
+  (backups, state-snapshots, checkpoints, cron, MCP, projects, config.yaml) and
+  `orgfeatures.probe()` accepts an injectable `user_home` so tests stay hermetic.
 
 ## Public-readiness (planned)
 

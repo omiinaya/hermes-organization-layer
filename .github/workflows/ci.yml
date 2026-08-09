@@ -4,20 +4,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
-    name: pytest (${{ matrix.os }} / py${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
+    name: pytest (self-hosted / py${{ matrix.python }})
+    runs-on: [self-hosted, linux, x64, pve-scripts]
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
 
@@ -35,6 +36,7 @@ jobs:
           repo = Path.cwd()
           with tempfile.TemporaryDirectory(prefix="ci-org-") as td:
               os.environ["HERMES_ORG_WORKSPACE"] = td
+              os.environ["HERMES_HOME"] = str(Path(td) / ".hermes")
               sys.path.insert(0, str(repo / "plugin"))
               from orgcore import actions
               actions.cmd_init()

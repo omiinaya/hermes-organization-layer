@@ -25,6 +25,10 @@ cross-platform (Windows / macOS / Linux), English-only.
   the best profile for a task; `org profile <name> when=...` records routing fields
   (model, when_to_use, tools, notes). The index is the one place to answer "what profile,
   for what, with which tool/venv."
+- **Feature-coverage gate** — `org features` reports which Hermes capabilities are in
+  use (backups, checkpoints, memory provider, cron, MCP, projects, plugins, skills,
+  profiles) with a ready/not-ready verdict, turning "are we using Hermes to its fullest
+  and is our data safe" into an enforceable check.
 - **Hygiene** — `flag` policy (default): stale (>90 days idle) and expired-scratch (>30 days)
   are flagged in the index, nothing is deleted. `auto` policy + `org prune --apply` archives
   candidates into `_archive/` as tarballs — and `org restore <name>` unpacks one back.
@@ -53,12 +57,20 @@ hermes plugins install omiinaya/hermes-organization-layer --enable
 /org profiles                list Hermes profiles + routing (auto-registered)
 /org suggest "write tests"   which profile to use for a workload
 /org profile dev when="building code"   set routing fields on a profile
+/org features                feature-coverage gate (backups, cron, mcp, …)
 /org config                  show resolved configuration
 ```
 
 The same operations are exposed as agent tools: `org_init`, `org_index`, `org_new`,
 `org_find`, `org_status`, `org_check`, `org_prune`, `org_restore`, `org_run`,
-`org_profiles`, `org_suggest`, `org_set_profile`.
+`org_profiles`, `org_suggest`, `org_set_profile`, `org_features`.
+
+## Feature gate
+
+`org features` probes `$HERMES_HOME` and reports each capability as ✓ / △ / ✗ with a
+one-line hint, then a READY / NOT READY verdict. Critical items (backups, checkpoints,
+memory provider) must all be ✓ for READY — data-safety gates; recommended/advisory
+items (cron, MCP, projects, plugins, skills, profiles) steer the "fullest extent" work.
 
 ## Profiles & routing
 

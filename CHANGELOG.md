@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.0] - 2026-08-09
+
+Production-hardening pass.
+
+- **Feature-coverage gate (`org features` / `org_features` tool)** — probes
+  `$HERMES_HOME` and reports backups (zip + state-snapshots), checkpoints, memory
+  provider, cron, MCP, projects, plugins, skills, profiles as ✓/△/✗ with hints and a
+  READY/NOT READY verdict. Critical tiers gate on data safety; recommended/advisory
+  tiers steer "fullest extent" adoption. Memory provider extraction is scoped to the
+  `memory:` block (fixed a bug where it read the model provider).
+- **CI now runs on a self-hosted GitHub Actions runner** (`pve-scripts-runner` in
+  LXC 100 / pve-scripts-local, labels self-hosted,linux,x64,pve-scripts) with a
+  py3.10/3.11/3.12 matrix + the privacy-invariant step — no longer blocked by the
+  account's hosted-runners budget.
+- **Display-layer coverage**: tests for `_fmt`/`_fmt_entry_line` (run results, prune
+  previews, capabilities, profiles, venvs) and the feature gate. Suite: 36 tests,
+  ~84% line coverage.
+- **plugin.yaml** description now reflects the full feature set (was stale).
+- Backup/checkpoint rehearsal: a real `hermes backup` zip was created, integrity-tested,
+  and verified to restore (config.yaml + state.db present).
+
 ## [0.3.0] - 2026-08-09
 
 Profile routing — the org layer now knows *who to use for what*.

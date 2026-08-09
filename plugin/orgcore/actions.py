@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config
+from . import features as orgfeatures
 from . import index as orgindex
 from . import profiles as orgprofiles
 from . import workspace as orgws
@@ -79,6 +80,13 @@ def cmd_set_profile(name: str, **fields) -> tuple:
         cfg = config.load_config(_root())
         orgindex.write_index(_root(), cfg)
     return "PROFILE SET", res
+
+
+def cmd_features() -> tuple:
+    """Feature-coverage gate: which Hermes capabilities are in use, and verdict."""
+    report = orgfeatures.probe()
+    return ("FEATURE GATE" if report["ok"] else "FEATURE GATE (not ready)",
+            report)
 
 
 def cmd_new(kind: str, name: str, purpose: str = "", tags: list[str] | None = None) -> tuple:
@@ -365,6 +373,14 @@ def _fmt_entry_line(it: dict, indent: int = 0) -> str:
             line += f" → {it['stdout'][:200]}"
         if it.get("stderr"):
             line += f" ! {it['stderr'][:120]}"
+        return line
+    if "capability" in it:  # feature-gate capability
+        status = str(it.get("status", ""))
+        badge = {"ok": "✓", "warn": "△", "missing": "✗"}.get(status, "?")
+        tier = str(it.get("tier", ""))
+        line = f"{pad}- {badge} {it['capability']} [{tier}] — {it.get('detail', '')}"
+        if it.get("hint"):
+            line += f"  ({it['hint']})"
         return line
     if "dest" in it:  # prune preview
         line = f"{pad}- `{it.get('rel_path', it.get('name', ''))}` [{it.get('status', '')}]"

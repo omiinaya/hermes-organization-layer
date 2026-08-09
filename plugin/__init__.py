@@ -6,10 +6,10 @@ a generated INDEX.md + index.json, per-entry metadata, and a stale/scratch hygie
 Usage (slash):  /org init | index | new <kind> <name> [purpose...] | find <q> | status
                 | check | prune [--apply] | restore <name> | run <name>
                 | profiles | suggest <task> | profile <name> [model/when/tools...]
-                | config | help
+                | features | config | help
 Tools:          org_init, org_index, org_new, org_find, org_status, org_check,
                 org_prune, org_restore, org_run, org_profiles, org_suggest,
-                org_set_profile
+                org_set_profile, org_features
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ HELP = (
     "  `/org profiles`                      - list Hermes profiles (auto-registered) + routing\n"
     "  `/org suggest <task>`                - which profile to use for a workload\n"
     "  `/org profile <name> when=<text>`    - set routing fields (model/when/tools/notes)\n"
+    "  `/org features`                      - feature-coverage gate (backups, cron, mcp, …)\n"
     "  `/org config`                        - show resolved config\n"
     "  `/org help`                          - this message\n"
     "\nKinds: projects, test-scripts, scratch, data, notes, docs, assets, profiles.\n"
@@ -81,6 +82,8 @@ def _handle_slash(raw_args: str) -> str:
         return actions._fmt(*actions.cmd_suggest(rest))
     if cmd == "profile":
         return _handle_profile_sub(rest)
+    if cmd in ("features", "gate", "readiness", "coverage"):
+        return actions._fmt(*actions.cmd_features())
     if cmd in ("config", "show"):
         return actions._fmt(*actions.cmd_show_config())
     if cmd in ("help", "?"):
@@ -158,6 +161,10 @@ def _t_set_profile(args: dict) -> str:
     return actions._fmt(*actions.cmd_set_profile(name, **fields))
 
 
+def _t_features(args: dict) -> str:
+    return actions._fmt(*actions.cmd_features())
+
+
 _TOOL_SPECS = [
     ("org_init", "Scaffold the org workspace (creates the platform-default or a given directory + config).",
      {"type": "object", "properties": {"workspace": {"type": "string", "description": "Optional absolute workspace path (else the platform default)."}}, "additionalProperties": False}),
@@ -190,13 +197,15 @@ _TOOL_SPECS = [
                                        "tags": {"type": "array", "items": {"type": "string"}},
                                        "notes": {"type": "string"}},
       "required": ["name"], "additionalProperties": False}),
+    ("org_features", "Feature-coverage gate: report which Hermes capabilities are in use (backups, checkpoints, memory, cron, MCP, projects, plugins, skills, profiles) plus a ready/not-ready verdict.",
+     {"type": "object", "properties": {}}),
 ]
 
 _HANDLERS = {"org_init": _t_init, "org_index": _t_index, "org_new": _t_new,
              "org_find": _t_find, "org_status": _t_status, "org_check": _t_check,
              "org_prune": _t_prune, "org_restore": _t_restore, "org_run": _t_run,
              "org_profiles": _t_profiles, "org_suggest": _t_suggest,
-             "org_set_profile": _t_set_profile}
+             "org_set_profile": _t_set_profile, "org_features": _t_features}
 
 
 def register(ctx) -> None:
