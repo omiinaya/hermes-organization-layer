@@ -257,3 +257,69 @@ def test_run_missing_entry_points(ws):
     tag, data = actions.cmd_run("quiet")
     assert not data["ok"]
     assert "no entry_points" in data["error"]
+
+
+# -- profile domain (routing) ----------------------------------------------
+
+@pytest.fixture
+def profws(tmp_path, monkeypatch):
+    """An isolated workspace AND an isolated HERMES_HOME with 2 fake profiles."""
+    monkeypatch.setenv("HERMES_ORG_WORKSPACE", str(tmp_path))
+    hh = tmp_path / ".hermes"
+    monkeypatch.setenv("HERMES_HOME", str(hh))
+    # default (active) lives at HOME root; dev/infra are named profiles.
+    (hh / "profiles" / "dev").mkdir(parents=True)
+    (hh / "profiles" / "dev" / "profile.yaml").write_text(
+        "description: 'Code & build workstream: plugin, relay, org-layer dev. Use for writing, building, testing code.'\n")
+    (hh / "profiles" / "infra").mkdir(parents=True)
+    (hh / "profiles" / "infra" / "profile.yaml").write_text(
+        "description: 'Service & middleware ops: memory gateway, embed inference, proxy relay daemons. Use for operating shared services.'\n")
+    actions.cmd_init()
+    return tmp_path
+
+
+def test_index_auto_registers_profiles(profws):
+    tag, data = actions.cmd_index()
+    assert tag == "INDEX OK"
+    # profiles auto-registered on index
+    jd = json.loads((profws / "index.json").read_text())
+    names = {it["name"] for it in jd["items"] if it["kind"] == "profiles"}
+    assert {"default", "dev", "infra"} <= names
+    # each has a routing meta file seeded from its profile.yaml description
+    dev = json.loads((profws / "profiles" / "dev" / ".org.json").read_text())
+    assert "dev" in dev["purpose"]
+
+
+def test_profiles_lists_with_routing(profws):
+    actions.cmd_index()
+    tag, data = actions.cmd_profiles()
+    assert tag == "PROFILES"
+    assert set(data["registered"]) >= {"default", "dev", "infra"}
+    items = {it["name"]: it for it in data["items"]}
+    assert items["infra"]["launch"] == "hermes -p infra"
+    assert items["default"]["is_active"] is True
+
+
+def test_suggest_routes_by_workload(profws):
+    actions.cmd_index()
+    tag, data = actions.cmd_suggest("operate the memory gateway and proxy relay services")
+    assert tag == "SUGGEST" and data["ok"]
+    assert data["profile"] == "infra"
+
+    tag, data = actions.cmd_suggest("build a new plugin and write tests")
+    assert data["profile"] in ("dev", "default")
+
+
+def test_suggest_falls_back_to_active(profws):
+    actions.cmd_index()
+    tag, data = actions.cmd_suggest("xyzzy unrelated thing")
+    assert data["profile"] == "default"
+    assert data["match_score"] == 0
+
+
+def test_set_profile_updates_routing(profws):
+    actions.cmd_index()
+    tag, data = actions.cmd_set_profile("dev", when_to_use="writing and building code")
+    assert tag == "PROFILE SET" and data["ok"]
+    cur = json.loads((profws / "profiles" / "dev" / ".org.json").read_text())
+    assert cur["when_to_use"] == "writing and building code"

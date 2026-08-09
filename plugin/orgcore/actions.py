@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import config
 from . import index as orgindex
+from . import profiles as orgprofiles
 from . import workspace as orgws
 
 
@@ -32,8 +33,52 @@ def cmd_init(workspace: str | None = None) -> tuple:
 def cmd_index() -> tuple:
     root = _root()
     cfg = config.load_config(root)
+    # Auto-register Hermes profiles into the workspace so the index always
+    # reflects live wiring (new profiles appear; descriptions refresh).
+    reg = orgprofiles.register(root, cfg)
     report = orgindex.write_index(root, cfg)
+    report["profiles"] = {"created": reg["created"], "updated": reg["updated"]}
     return "INDEX OK", report
+
+
+def cmd_profiles() -> tuple:
+    """List registered Hermes profiles with their routing metadata."""
+    root = _root()
+    cfg = config.load_config(root)
+    reg = orgprofiles.register(root, cfg)  # ensure all live profiles are present
+    items = []
+    for raw in orgws.list_entries(root, cfg):
+        if raw["kind"] != "profiles":
+            continue
+        meta = config.load_meta(raw["dir"])
+        items.append({
+            "name": raw["name"],
+            "rel_path": raw["rel_path"],
+            "status": meta.get("status", "active"),
+            "purpose": meta.get("description") or meta.get("purpose", ""),
+            "model": meta.get("model", ""),
+            "when_to_use": meta.get("when_to_use", ""),
+            "launch": meta.get("launch", ""),
+            "tools": meta.get("tools", []),
+            "venvs": meta.get("venvs", []),
+            "is_active": meta.get("is_active", False),
+        })
+    return "PROFILES", {"registered": reg["profiles"], "items": items}
+
+
+def cmd_suggest(task: str) -> tuple:
+    """Suggest which profile to use for a workload/task description."""
+    res = orgprofiles.suggest(str(_root()), task)
+    return "SUGGEST", res
+
+
+def cmd_set_profile(name: str, **fields) -> tuple:
+    """Update routing fields (model, when_to_use, tools, notes...) on a profile."""
+    res = orgprofiles.set_entry(_root(), name, **fields)
+    if res["ok"]:
+        cfg = config.load_config(_root())
+        orgindex.write_index(_root(), cfg)
+    return "PROFILE SET", res
 
 
 def cmd_new(kind: str, name: str, purpose: str = "", tags: list[str] | None = None) -> tuple:
@@ -311,7 +356,7 @@ def _fmt(tag: str, data) -> str:
 
 
 def _fmt_entry_line(it: dict, indent: int = 0) -> str:
-    """Format one list item (index entry, run result, or archive plan) on a line."""
+    """Format one list item (index entry, run result, archive plan, profile) on a line."""
     pad = "  " * indent
     if "command" in it:  # cmd_run result
         line = f"{pad}- `{it['command']}`"
@@ -326,10 +371,26 @@ def _fmt_entry_line(it: dict, indent: int = 0) -> str:
         line += f" → {it['dest']}"
         return line
     line = f"{pad}- `{it.get('rel_path', it.get('name', ''))}` [{it.get('status', '')}]"
-    p = it.get("purpose", "")
+    p = it.get("purpose") or it.get("description") or ""
     line += (f" — {p}" if p else "")
+    if it.get("score") is not None:
+        line += f" (score {it['score']})"
+    if it.get("is_active"):
+        line += " ⬢active"
+    if it.get("model"):
+        line += f" · model: {it['model']}"
+    if it.get("when_to_use"):
+        line += f" · when: {it['when_to_use']}"
+    if it.get("launch"):
+        line += f" · launch: {it['launch']}"
     if it.get("entry_points"):
         line += f" · entry: {', '.join(it['entry_points'])}"
+    if it.get("tools"):
+        tool_txt = ", ".join(
+            f"{t.get('name', t)}" + (f"→{t.get('profile', '')}" if t.get("profile") else "")
+            for t in it["tools"] if isinstance(t, dict))
+        if tool_txt:
+            line += f" · tools: {tool_txt}"
     if it.get("venvs"):
         venv_txt = ", ".join(
             f"{x['path']} ({x['version']})" if x.get("version") else x["path"]

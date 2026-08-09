@@ -4,9 +4,12 @@ Keeps a Hermes workspace tidy and findable: a canonical cross-platform folder la
 a generated INDEX.md + index.json, per-entry metadata, and a stale/scratch hygiene policy.
 
 Usage (slash):  /org init | index | new <kind> <name> [purpose...] | find <q> | status
-                | check | prune [--apply] | restore <name> | run <name> | config | help
+                | check | prune [--apply] | restore <name> | run <name>
+                | profiles | suggest <task> | profile <name> [model/when/tools...]
+                | config | help
 Tools:          org_init, org_index, org_new, org_find, org_status, org_check,
-                org_prune, org_restore, org_run
+                org_prune, org_restore, org_run, org_profiles, org_suggest,
+                org_set_profile
 """
 
 from __future__ import annotations
@@ -24,9 +27,12 @@ HELP = (
     "  `/org prune [--apply]`               - dry-run preview (default) or archive stale/expired\n"
     "  `/org restore <name>`                - unpack an entry back out of _archive/\n"
     "  `/org run <name>`                    - run the entry_points recorded for an entry\n"
+    "  `/org profiles`                      - list Hermes profiles (auto-registered) + routing\n"
+    "  `/org suggest <task>`                - which profile to use for a workload\n"
+    "  `/org profile <name> when=<text>`    - set routing fields (model/when/tools/notes)\n"
     "  `/org config`                        - show resolved config\n"
     "  `/org help`                          - this message\n"
-    "\nKinds: projects, test-scripts, scratch, data, notes, docs, assets.\n"
+    "\nKinds: projects, test-scripts, scratch, data, notes, docs, assets, profiles.\n"
     "Overrides: HERMES_ORG_WORKSPACE or the config at <workspace>/.org/config.json."
 )
 
@@ -67,11 +73,35 @@ def _handle_slash(raw_args: str) -> str:
         if not names:
             return "Usage: /org run <name>  — run the entry_points recorded in <name>/.org.json"
         return actions._fmt(*actions.cmd_run(names[0]))
+    if cmd in ("profiles", "profile-list", "who"):
+        return actions._fmt(*actions.cmd_profiles())
+    if cmd in ("suggest", "route", "which"):
+        if not rest:
+            return "Usage: /org suggest <task/workload description>"
+        return actions._fmt(*actions.cmd_suggest(rest))
+    if cmd == "profile":
+        return _handle_profile_sub(rest)
     if cmd in ("config", "show"):
         return actions._fmt(*actions.cmd_show_config())
     if cmd in ("help", "?"):
         return HELP
     return "Unknown subcommand. " + HELP
+
+
+def _handle_profile_sub(rest: str) -> str:
+    """/org profile <name> [key=value ...] — set routing fields on a profile."""
+    parts = (rest or "").split()
+    if not parts:
+        return "Usage: /org profile <name> [model=... when=... tools=... notes=...]"
+    name = parts[0]
+    fields: dict = {}
+    for kv in parts[1:]:
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            fields[k.strip()] = v.strip()
+    if not fields:
+        return actions._fmt(*actions.cmd_profiles())
+    return actions._fmt(*actions.cmd_set_profile(name, **fields))
 
 
 # ── Agent tool handlers ────────────────────────────────────────────
@@ -114,6 +144,20 @@ def _t_run(args: dict) -> str:
     return actions._fmt(*actions.cmd_run(args.get("name", "")))
 
 
+def _t_profiles(args: dict) -> str:
+    return actions._fmt(*actions.cmd_profiles())
+
+
+def _t_suggest(args: dict) -> str:
+    return actions._fmt(*actions.cmd_suggest(args.get("task", "")))
+
+
+def _t_set_profile(args: dict) -> str:
+    name = args.get("name", "")
+    fields = {k: v for k, v in args.items() if k != "name" and v is not None}
+    return actions._fmt(*actions.cmd_set_profile(name, **fields))
+
+
 _TOOL_SPECS = [
     ("org_init", "Scaffold the org workspace (creates the platform-default or a given directory + config).",
      {"type": "object", "properties": {"workspace": {"type": "string", "description": "Optional absolute workspace path (else the platform default)."}}, "additionalProperties": False}),
@@ -134,11 +178,25 @@ _TOOL_SPECS = [
      {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False}),
     ("org_run", "Run the entry_points recorded in an entry's .org.json, from that entry's directory.",
      {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False}),
+    ("org_profiles", "List Hermes profiles (auto-registered into the workspace) with their routing metadata: model, when_to_use, launch, tools.",
+     {"type": "object", "properties": {}}),
+    ("org_suggest", "Suggest which Hermes profile to use for a task or workload description.",
+     {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"], "additionalProperties": False}),
+    ("org_set_profile", "Set routing fields on a registered profile (model, when_to_use, tools, notes, tags).",
+     {"type": "object", "properties": {"name": {"type": "string"},
+                                       "model": {"type": "string"},
+                                       "when_to_use": {"type": "string"},
+                                       "tools": {"type": "array", "items": {"type": "string"}},
+                                       "tags": {"type": "array", "items": {"type": "string"}},
+                                       "notes": {"type": "string"}},
+      "required": ["name"], "additionalProperties": False}),
 ]
 
 _HANDLERS = {"org_init": _t_init, "org_index": _t_index, "org_new": _t_new,
              "org_find": _t_find, "org_status": _t_status, "org_check": _t_check,
-             "org_prune": _t_prune, "org_restore": _t_restore, "org_run": _t_run}
+             "org_prune": _t_prune, "org_restore": _t_restore, "org_run": _t_run,
+             "org_profiles": _t_profiles, "org_suggest": _t_suggest,
+             "org_set_profile": _t_set_profile}
 
 
 def register(ctx) -> None:

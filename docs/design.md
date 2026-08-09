@@ -51,6 +51,11 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
 - `default_workspace_root()` resolves per-OS and honors `HERMES_ORG_WORKSPACE`.
 - Archive lifecycle is fully reversible: `prune --apply` tars into `_archive/`,
   `restore <name>` extracts back (path-traversal guarded, refuses to overwrite).
+- **Profile routing is a second domain, not a second index**: `profiles/` entries live
+  in the same workspace/index as filesystem entries and share the same venv, check,
+  prune, and privacy machinery. Profiles are auto-registered from live Hermes wiring
+  (`$HERMES_HOME/profiles/*` + the active home), never hardcoded. Absolute home paths
+  are deliberately not persisted (strict privacy).
 
 ## Public-readiness (planned)
 

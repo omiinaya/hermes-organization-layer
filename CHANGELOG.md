@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0] - 2026-08-09
+
+Profile routing — the org layer now knows *who to use for what*.
+
+- **Profile domain (`profiles/` kind)**: `org index` auto-registers every Hermes
+  profile (active default + all `$HERMES_HOME/profiles/*`) into the workspace,
+  seeding each routing entry from the profile's native `profile.yaml` description.
+  Absolute home paths are deliberately NOT persisted (privacy strict mode).
+- **`org profiles`** — the routing table: name, model, when_to_use, launch, tools,
+  venvs, active flag.
+- **`org suggest "<workload>"`** — picks the best profile by keyword-matching the
+  workload against profile descriptions, with a scored candidate list and a
+  safe fallback to the active profile when nothing matches.
+- **`org profile <name> when=... model=... tools=... notes=...`** — record routing
+  fields on a profile (preserved across re-indexes).
+- New agent tools: `org_profiles`, `org_suggest`, `org_set_profile` (total 12).
+
 ## [0.2.0] - 2026-08-09
 
 Lifecycle and drift tooling.

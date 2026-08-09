@@ -16,6 +16,7 @@ DEFAULT_FOLDERS: list[str] = [
     "notes",          # markdown notes/knowledge not bound to a project
     "docs",           # documentation not bound to a project
     "assets",         # images, media, binaries
+    "profiles",       # auto-registered Hermes profiles (routing: what to use when)
     "_archive",       # pruned items land here (tarballed) — never hard-deleted
 ]
 
