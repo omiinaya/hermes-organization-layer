@@ -22,5 +22,6 @@
     "stale_after_days": 90,
     "auto_archive_after_days": 120
   },
-  "language": "en"
+  "language": "en",
+  "privacy": "strict"
 }

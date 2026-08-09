@@ -96,3 +96,42 @@ def test_explicit_venv_meta_wins(ws):
     items = index.build_items(ws, config.load_config(ws))
     it = next(x for x in items if x["name"] == "legacy")
     assert any(v["path"] == "custom-env" and v["version"] == "3.9" for v in it["venvs"])
+
+
+# -- privacy / public-readiness --------------------------------------------
+
+_DRIVE = ("C:", "D:", "E:", "F:")
+
+
+def _assert_no_abs_paths(ws: Path) -> None:
+    md = (ws / "INDEX.md").read_text(encoding="utf-8")
+    jd = json.loads((ws / "index.json").read_text(encoding="utf-8"))
+    abs_ws = str(ws)  # e.g. /tmp/pytest-*/...  (absolute by construction)
+    assert abs_ws not in md, "INDEX.md must not contain the absolute workspace path"
+    assert abs_ws not in json.dumps(jd), "index.json must not contain the absolute workspace path"
+    # every path-like field in the machine index is relative (rel_path, venv paths)
+    for it in jd["items"]:
+        assert not it["rel_path"].startswith("/") and not it["rel_path"].startswith(_DRIVE)
+        for v in it.get("venvs", []):
+            assert not v["path"].startswith("/") and not v["path"].startswith(_DRIVE)
+
+
+def test_index_never_leaks_absolute_paths_default(ws):
+    actions.cmd_new("projects", "relay", "SOCKS5 proxy rotation", tags=["proxy"])
+    tag, data = actions.cmd_index()
+    assert data["ok"]
+    jd = json.loads((ws / "index.json").read_text())
+    assert jd["privacy"] == "strict"
+    assert jd["workspace"] == ws.name  # basename only, never the machine path
+    assert not jd["workspace"].startswith("/")
+    _assert_no_abs_paths(ws)
+
+
+def test_privacy_full_opt_out_restores_abs_path(ws):
+    cfg = config.load_config(ws)
+    cfg["privacy"] = "full"
+    config.save_config(ws, cfg)
+    actions.cmd_new("projects", "app")
+    jd = json.loads((ws / "index.json").read_text())
+    assert jd["privacy"] == "full"
+    assert jd["workspace"] == str(ws)  # explicit opt-out documents the trade-off

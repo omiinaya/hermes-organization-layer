@@ -146,11 +146,29 @@ def build_items(root: Path, cfg: dict) -> list[dict]:
     return items
 
 
+# -- index privacy ---------------------------------------------------------
+# The index is a snapshot that users may share (and must be safe to commit if the
+# workspace is a git repo). Under "strict" (the default) we never write an absolute
+# machine path into index.json or INDEX.md; the workspace root is reported by its
+# basename only. "full" restores the absolute path for local debugging.
+
+def _display_workspace(cfg: dict) -> str:
+    ws = cfg.get("workspace", "")
+    if cfg.get("privacy", "strict") == "full":
+        return str(ws)
+    try:
+        name = Path(str(ws)).name
+        return name or "workspace"
+    except Exception:
+        return "workspace"
+
+
 def generate_payload(items: list[dict], cfg: dict) -> dict:
     return {
         "version": 1,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "workspace": cfg["workspace"],
+        "workspace": _display_workspace(cfg),   # basename only under strict privacy
+        "privacy": cfg.get("privacy", "strict"),
         "language": cfg.get("language", "en"),
         "policy": cfg["policy"],
         "items": items,
@@ -173,7 +191,7 @@ def render_markdown(items: list[dict], cfg: dict) -> str:
         "# Org Index",
         "",
         f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} · "
-        f"Workspace: `{cfg['workspace']}`",
+        f"Workspace: `{_display_workspace(cfg)}`",
         f"Language: {cfg.get('language', 'en')} · {len(items)} entries",
         "",
     ]

@@ -51,7 +51,12 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
 
 ## Public-readiness (planned)
 
-- Relative paths only in the index; no secrets ever stored.
-- Config is a documented JSON file; example in `workspace-skel/`.
+- Index privacy enforced, not just claimed: default `privacy: strict` means the
+  index artifacts never contain an absolute machine path (workspace root is
+  emitted as basename only); a regression test guards this invariant.
+- Per-entry paths are relative; no secrets ever stored. `full` privacy mode exists
+  only for explicit local debugging.
+- Config is a documented JSON file; example in `workspace-skel/` (incl. a
+  `.gitignore.example` template for git-backed workspaces).
 - Tests (pytest) cover core behavior; English-only strings.
 - MIT license; CHANGELOG kept; repo renamed/visible when public.

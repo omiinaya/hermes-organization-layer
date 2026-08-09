@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.1] - 2026-08-09
+
+Public-readiness hardening.
+
+- **Index privacy (default `strict`)**: INDEX.md and index.json never contain an
+  absolute machine path anymore — the workspace root is emitted as its basename
+  only. Opt out with `"privacy": "full"` in `.org/config.json` (local debugging).
+- Regression tests assert no absolute path ever lands in the index artifacts.
+- `.gitignore` now covers per-entry `.org.json`; added `workspace-skel/.gitignore.example`
+  template for workspaces that are git repos.
+
 ## [0.1.0] - 2026-08-09
 
 Initial release (private).

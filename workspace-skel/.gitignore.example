@@ -1,0 +1,17 @@
+# Org workspace — recommended .gitignore
+# Copy to <workspace>/.gitignore if the workspace is a git repo.
+# Generated artifacts (safe to rebuild with `org index`):
+index.json
+INDEX.md
+# Per-entry metadata is rebuilt on demand and may hold notes you don't want shared:
+.org.json
+# Caches / local-only:
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+dist/
+build/
+.DS_Store

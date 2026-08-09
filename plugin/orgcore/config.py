@@ -68,6 +68,8 @@ def default_config() -> dict:
         "excludes": list(DEFAULT_EXCLUDES),
         "policy": dict(DEFAULT_POLICY),
         "language": "en",
+        "privacy": "strict",   # "strict" (default) scrubs absolute machine paths from
+                               # index artifacts; "full" keeps absolute paths for debugging.
     }
 
 
@@ -78,7 +80,7 @@ def load_config(root: Path) -> dict:
     if cfg_path.exists():
         try:
             saved = json.loads(cfg_path.read_text(encoding="utf-8"))
-            for key in ("folders", "excludes", "policy", "version", "language"):
+            for key in ("folders", "excludes", "policy", "version", "language", "privacy"):
                 if key in saved:
                     cfg[key] = saved[key]
         except Exception:
