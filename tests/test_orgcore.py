@@ -388,6 +388,17 @@ def test_memory_provider_scoped_to_memory_block():
     assert features._memory_provider("providers:\n    provider: xyz\n") == ""
 
 
+def test_gate_warn_does_not_block_ready(features_fixed):
+    # Delete the checkpoint files so checkpoints=warn (empty store) but backups
+    # and memory are fine -> READY still (warn is amber, not a blocker).
+    shutil.rmtree(Path(features_fixed) / ".hermes" / "checkpoints")
+    from orgcore import features
+    rep = features.probe(Path(features_fixed) / ".hermes", user_home=Path(features_fixed))
+    cp = next(c for c in rep["capabilities"] if c["capability"] == "checkpoints")
+    assert cp["status"] == "warn"
+    assert rep["ready"] is True
+
+
 # -- display layer (_fmt) -------------------------------------------------------
 
 def test_fmt_scalars_dict_list_str():

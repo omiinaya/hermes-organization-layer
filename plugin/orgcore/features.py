@@ -177,7 +177,10 @@ def probe(home: Path | None = None, user_home: Path | None = None) -> dict:
 
     # ── Verdict ────────────────────────────────────────────────────────────
     critical = [c for c in caps if c["tier"] == "critical"]
-    ready = all(c["status"] == "ok" for c in critical)
+    # READY requires that no critical capability is MISSING. A "warn" (e.g. an
+    # aging backup, an empty-but-auto-filling checkpoint store) is amber, not a
+    # blocker. missing = you don't have the thing at all.
+    ready = all(c["status"] != "missing" for c in critical)
     return {
         "ok": ready,
         "home": str(home),
