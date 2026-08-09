@@ -8,30 +8,37 @@ on:
 
 jobs:
   test:
-    name: pytest (self-hosted / py${{ matrix.python }})
+    name: pytest (self-hosted, Python 3.13)
     runs-on: [self-hosted, linux, x64, pve-scripts]
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Install test dependency
-        run: python -m pip install --quiet pytest
+      # Self-hosted runner (LXC 100 / pve-scripts-local) uses a provisioned venv
+      # (/opt/org-ci-venv, Python 3.13 + pytest) instead of setup-python.
+      - name: Python environment
+        run: /opt/org-ci-venv/bin/python --version && /opt/org-ci-venv/bin/python -m pytest --version
 
       - name: Run the orgcore test suite
-        run: python -m pytest tests/ -q
+        run: /opt/org-ci-venv/bin/python -m pytest tests/ -q
+
+      - name: Verify register() exposes the full tool surface
+        run: |
+          cd plugin
+          /opt/org-ci-venv/bin/python - <<'EOF'
+          import sys; sys.path.insert(0,"."); import plugin as P
+          class Ctx:
+              def __init__(s): s.cmds=[]; s.tools=[]
+              def register_command(s,n,**k): s.cmds.append(n)
+              def register_tool(s,**k): s.tools.append(k["name"])
+          c=Ctx(); P.register(c)
+          assert c.cmds==["org"] and len(c.tools)>=13, (c.cmds, len(c.tools))
+          print("register OK:", len(c.tools), "tools")
+          EOF
 
       - name: Privacy invariant (no absolute paths in index artifacts)
-        shell: python
         run: |
-          import json, os, subprocess, sys, tempfile
+          /opt/org-ci-venv/bin/python - <<'EOF'
+          import json, os, sys, tempfile
           from pathlib import Path
           repo = Path.cwd()
           with tempfile.TemporaryDirectory(prefix="ci-org-") as td:
@@ -47,3 +54,4 @@ jobs:
               assert jd["privacy"] == "strict" and jd["workspace"] == Path(td).name
               assert not jd["items"][0]["rel_path"].startswith(("/", "C:", "D:"))
           print("privacy invariant OK")
+          EOF
