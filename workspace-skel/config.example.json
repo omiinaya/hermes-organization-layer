@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "workspace": "~",
+  "folders": [
+    "projects",
+    "test-scripts",
+    "scratch",
+    "data",
+    "notes",
+    "docs",
+    "assets",
+    "_archive"
+  ],
+  "excludes": [
+    ".git", "node_modules", "__pycache__", ".pytest_cache",
+    ".venv", "venv", "env", ".env", "dist", "build", "target",
+    ".hermes", ".org", "_archive", ".DS_Store", "*.egg-info", "*.pyc"
+  ],
+  "policy": {
+    "stale_policy": "flag",
+    "scratch_ttl_days": 30,
+    "stale_after_days": 90,
+    "auto_archive_after_days": 120
+  },
+  "language": "en"
+}

@@ -1,0 +1,5 @@
+name: hermes-organization-layer
+version: 0.1.0
+description: "Hermes organization layer: cross-platform workspace scaffold, generated INDEX.md + index.json, per-entry metadata, and stale/scratch hygiene. Keeps a Hermes instance tidy over time."
+pip_dependencies: []
+hooks: []
