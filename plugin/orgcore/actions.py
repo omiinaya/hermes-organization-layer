@@ -360,13 +360,30 @@ def cmd_check() -> tuple:
     for it in items:
         statuses[it["status"]] = statuses.get(it["status"], 0) + 1
 
+    # Git health: work that exists but was never pushed (elf-gap detection).
+    git_health: dict[str, dict] = {}
+    for it in items:
+        gh = _git_health(it)
+        if gh is not None:
+            git_health[it["rel_path"]] = gh
+    git_unpushed = sorted(
+        rp for rp, gh in git_health.items()
+        if gh.get("unpushed", 0) and gh.get("unpushed", 0) not in (-1, 0)
+    )
+    git_no_remote = sorted(rp for rp, gh in git_health.items() if not gh.get("remote"))
+    git_dirty = sorted(rp for rp, gh in git_health.items() if gh.get("dirty"))
+
     report = {
-        "ok": not (missing_dirs or unindexed or leaky),
+        "ok": not (missing_dirs or unindexed or leaky or git_unpushed or git_no_remote),
         "indexed": len(items),
         "on_disk": len(on_disk),
         "missing_dirs": missing_dirs,
         "unindexed": unindexed,
         "privacy_leaks": leaky,
+        "git_unpushed": git_unpushed,
+        "git_no_remote": git_no_remote,
+        "git_dirty": git_dirty,
+        "git_health": git_health,
         "status_counts": statuses,
         "archives": [p.name for p in _archives(root)],
     }
@@ -377,6 +394,49 @@ def _meta_leaks_abs_path(meta: dict) -> bool:
     """True when any string value in meta is an absolute native path."""
     blob = json.dumps(meta)
     return bool(re.search(r'(?i)([a-z]:[\\/]|/(Users|home|root)/)', blob))
+
+
+def _git_health(entry: dict) -> dict | None:
+    """Git health of an indexed entry (None when the entry is not a git repo).
+
+    Returns remote presence, ahead-of-origin commit count, and dirty file
+    count so the org check can flag work that exists but was never pushed
+    (the classic elf gap: committed locally, invisible to GitHub).
+    """
+    d = entry.get("dir")
+    if not d or not (Path(d) / ".git").exists():
+        return None
+    d = str(d)
+    try:
+        branch = subprocess.run(
+            ["git", "-C", d, "branch", "--show-current"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "-C", d, "remote"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.splitlines()
+        ahead = 0
+        if remote and branch:
+            out = subprocess.run(
+                ["git", "-C", d, "rev-list", "--count", f"origin/{branch}..HEAD"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if out.returncode == 0:
+                ahead = int(out.stdout.strip() or 0)
+        dirty = subprocess.run(
+            ["git", "-C", d, "status", "--porcelain"],
+            capture_output=True, text=True, timeout=10,
+        )
+        dirty_n = len([l for l in dirty.stdout.splitlines() if l.strip()])
+        return {
+            "branch": branch or "(detached)",
+            "remote": remote[0] if remote else None,
+            "unpushed": ahead,
+            "dirty": dirty_n,
+        }
+    except Exception as e:  # noqa: BLE001 — report, never crash the check
+        return {"branch": "?", "remote": None, "unpushed": -1, "dirty": -1, "error": str(e)[:80]}
 
 
 def cmd_run(name: str) -> tuple:
