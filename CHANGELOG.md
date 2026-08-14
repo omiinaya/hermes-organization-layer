@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0] - 2026-08-13
+
+Git-health awareness — the org check now sees invisible work.
+
+- **`org check` git-health scan**: every indexed entry that is a git repo is
+  now inspected for the "elf gap" — work committed locally but never pushed.
+  New report fields: `git_unpushed` (commits ahead of origin), `git_no_remote`
+  (repo with no origin), `git_dirty` (uncommitted changes), and `git_health`
+  (full per-repo map: branch, remote, unpushed, dirty).
+- **`ok` now flips False** when any repo has unpushed commits or no remote, so
+  the check itself catches invisible work going forward.
+- Verified live: two family playbook repos (`proxmox-host`, `truenas-host`)
+  existed only at `/root/...` outside the workspace with no upstream; moved
+  home, registered, pushed, and the workspace check now passes green.
+
 ## [0.5.0] - 2026-08-09
 
 Convenience pass (last roadmap item — P4).
