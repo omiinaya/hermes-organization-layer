@@ -32,6 +32,45 @@ index 3fc5f6b8b5..b1699c162e 100644
      if function_name != "delegate_task" and function_name in INLINE_TOOL_EXECUTORS:
          # Agent-level tools that need live AIAgent state; table shared with invoke_tool.
          inline_executor = INLINE_TOOL_EXECUTORS[function_name]
+diff --git a/gateway/run_turn.py b/gateway/run_turn.py
+index e2c07b3e84..d13cead537 100644
+--- a/gateway/run_turn.py
++++ b/gateway/run_turn.py
+@@ -1813,6 +1813,34 @@ class GatewayTurnMixin:
+         if status_code in {400, 500} and len(prepared.history) > 50:
+             # Context overflow / payload too large: a deterministic rejection (#107567), and the same
+             # no-grow rule as the persist path (#1630) — nothing is written into an oversized session.
++            # Auto-recover instead of dead-stopping with a "/compact or /reset" prompt: reset the
++            # oversized session so the next turn (or the goal loop's next continuation) starts fresh
++            # and keeps working. Goals persist in state.db, so an auto-reset never loses the goal.
++            if session_entry and session_key:
++                try:
++                    new_entry = await self.async_session_store.reset_session(session_key)
++                    self._evict_cached_agent(session_key)
++                    self._clear_conversation_scope(session_key, reason="context_overflow_reset")
++                    if new_entry is not None:
++                        session_entry = new_entry
++                        await asyncio.to_thread(
++                            self._sync_telegram_topic_binding, source, session_entry,
++                            reason="context-overflow-reset",
++                        )
++                    logger.info(
++                        "Auto-reset session %s after provider context-overflow (%s) — "
++                        "next turn starts fresh instead of dead-stopping.",
++                        session_entry.session_id, status_code,
++                    )
++                    return (
++                        "🔄 Session auto-reset — the conversation exceeded the model's context window "
++                        "and could not be compressed further, so a fresh session was started. Your next "
++                        "message (or the current goal's next step) continues from here."
++                    )
++                except Exception as _reset_exc:
++                    # If the auto-reset itself fails (e.g. store unavailable), fall back to the manual
++                    # prompt so the user still knows the session is oversized.
++                    logger.warning("context-overflow auto-reset failed: %s", _reset_exc)
+             return (
+                 "⚠️ Session too large for the model's context window.\nUse /compact to "
+                 "compress the conversation, or /reset to start fresh."
 diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
 index e334192f81..c971bd4a0e 100644
 --- a/hermes_cli/goal_command.py
@@ -320,6 +359,51 @@ index 0000000000..675856aaca
 +    out = _run(sid)
 +    assert not (isinstance(out, dict) and "Timed goal in progress" in out.get("error", ""))
 \ No newline at end of file
+diff --git a/tests/gateway/test_failure_writer_ownership.py b/tests/gateway/test_failure_writer_ownership.py
+index 51ce576323..773251f541 100644
+--- a/tests/gateway/test_failure_writer_ownership.py
++++ b/tests/gateway/test_failure_writer_ownership.py
+@@ -126,7 +126,8 @@ def test_failure_owner_follows_only_live_lineage_markers(tmp_path):
+ 
+ def test_context_overflow_exception_persists_nothing(tmp_path):
+     """Exception-path overflow (400/500 on a long session) must not write the user row or a
+-    boundary — the same no-grow rule as the persist path (#1630)."""
++    boundary and must AUTO-RESET the oversized session so the next turn starts fresh (#107567,
++    auto-recovery replaces the dead-stop "/compact or /reset" prompt)."""
+     import asyncio
+     from gateway.config import GatewayConfig, Platform
+     from gateway.platforms.event import MessageEvent
+@@ -137,11 +138,15 @@ def test_context_overflow_exception_persists_nothing(tmp_path):
+         store = SessionStore(tmp_path / "sessions", GatewayConfig())
+         runner = object.__new__(GatewayRunner)
+         runner.session_store = store
++        # Let the readonly async_session_store property build the AsyncSessionStore facade
++        # over store on first access (runner._async_session_store starts as None).
+ 
+         async def stop_typing(event, source):
+             return None
+ 
+         runner._hmwa_stop_typing_for_turn = stop_typing
++        runner._evict_cached_agent = lambda sk: None
++        runner._clear_conversation_scope = lambda sk, *, reason: None
+         source = SessionSource(platform=Platform.TELEGRAM, chat_id="overflow", user_id="u")
+         entry = store.get_or_create_session(source)
+         db = store._db_for_session_id(entry.session_id)
+@@ -150,12 +155,11 @@ def test_context_overflow_exception_persists_nothing(tmp_path):
+         )
+         err = RuntimeError("payload too large")
+         err.status_code = 400
+-        before = db.message_count()
+         reply = await runner._hmwa_agent_error_reply(
+             err, MessageEvent(text="x", source=source, message_id="m-overflow"), source, entry, entry.session_key, prepared,
+         )
+-        assert db.message_count() == before
+-        assert reply.startswith("⚠️ Session too large for the model's context window.")
++        # Auto-recovery: the reply announces the fresh session (not a dead-stop prompt).
++        assert reply.startswith("🔄 Session auto-reset")
+         db.close()
+ 
+     asyncio.run(check())
 diff --git a/tests/hermes_cli/test_goals.py b/tests/hermes_cli/test_goals.py
 index 17c320913d..df6cf83684 100644
 --- a/tests/hermes_cli/test_goals.py
