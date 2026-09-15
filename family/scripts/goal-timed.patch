@@ -1,0 +1,418 @@
+diff --git a/agent/tool_executor.py b/agent/tool_executor.py
+index 3fc5f6b8b5..b1699c162e 100644
+--- a/agent/tool_executor.py
++++ b/agent/tool_executor.py
+@@ -1503,6 +1503,29 @@ def _resolve_sequential_dispatch(agent, ref: _ToolCallRef, messages: list) -> _S
+     function_name, function_args, effective_task_id, tool_call_id, middleware_trace = (
+         ref.name, ref.args, ref.task_id, ref.call_id, ref.trace,
+     )
++    # STRUCTURAL timed-goal guard: refuse clarify() while a timed goal is mid-run. A timeboxed
++    # goal must not stall the clock waiting on a user answer — the agent proceeds with its
++    # recommended option or banks the question and keeps working. Loaded lazily/defensively so
++    # a missing goal DB never blocks normal (non-goal) use.
++    if function_name == "clarify":
++        session_id = getattr(agent, "session_id", "") or ""
++        if session_id:
++            try:
++                from hermes_cli.goals import load_goal
++                _st = load_goal(session_id)
++                _dl = _st.deadline if (_st is not None and getattr(_st, "deadline", 0.0)) else 0.0
++            except Exception:
++                _dl = 0.0
++            if _dl and time.time() < _dl:
++                return _SequentialDispatch(
++                    lambda next_args: {
++                        "error": ("Timed goal in progress — clarify() is disabled so you cannot stall "
++                                  "the clock on a user question. Proceed with your recommended option and "
++                                  "note it as an assumption, or bank the question and keep working toward "
++                                  "the goal; surface the open question only after the time is up."),
++                        "skip_observation": True,
++                    }
++                )
+     if function_name != "delegate_task" and function_name in INLINE_TOOL_EXECUTORS:
+         # Agent-level tools that need live AIAgent state; table shared with invoke_tool.
+         inline_executor = INLINE_TOOL_EXECUTORS[function_name]
+diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
+index e334192f81..c971bd4a0e 100644
+--- a/hermes_cli/goal_command.py
++++ b/hermes_cli/goal_command.py
+@@ -7,6 +7,7 @@ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+ import logging
++import time
+ from typing import Callable
+ 
+ from hermes_cli import goals
+@@ -120,6 +121,32 @@ def _gate(mgr, arg, authorize_gate):
+         return GoalCommandResult(f"/goal gate {operation}: {exc}", error=True)
+ 
+ 
++def _parse_duration(arg: str) -> tuple[str, int | None]:
++    """Split a trailing duration off a goal string.
++
++    Accepts: 'upgrade sentinel for 1h', 'for 90m', 'for 45', and bare suffixes
++    'upgrade sentinel 1h', 'upgrade sentinel 90m', 'upgrade sentinel 45'.
++    Returns (goal_text, minutes_or_None).
++    """
++    import re
++    # Prefer explicit 'for <N>h|m'; also accept bare '<N>h|m' or just '<N>' minutes.
++    # Unit also accepts 'hr'/'hrs'/'hour'/'hours' (case-insensitive) — the common
++    # "1hr" spelling must resolve to an hour, not a plain (non-timed) goal.
++    m = re.search(r"(?:\s+for\s+|\Afor\s+)(\d+)(h|m|hr|hrs|hour|hours)?\s*$", arg, flags=re.IGNORECASE)
++    if m:
++        num, unit = int(m.group(1)), (m.group(2) or "m").lower()
++        minutes = num * 60 if unit.startswith("h") else num
++        goal_text = arg[: m.start()].strip()
++        return (goal_text or "focused work"), max(1, min(480, minutes))
++    m2 = re.search(r"\s+(\d+)(h|m|hr|hrs|hour|hours)?\s*$", arg, flags=re.IGNORECASE)
++    if m2:
++        num, unit = int(m2.group(1)), (m2.group(2) or "m").lower()
++        minutes = num * 60 if unit.startswith("h") else num
++        goal_text = arg[: m2.start()].strip()
++        return (goal_text or "focused work"), max(1, min(480, minutes))
++    return arg.strip(), None
++
++
+ def _set(mgr, arg, *, drafting, last_user_message, render, progress):
+     if drafting:
+         if not arg:
+@@ -135,9 +162,14 @@ def _set(mgr, arg, *, drafting, last_user_message, render, progress):
+     else:
+         headline, contract = goals.parse_contract(arg)
+         contract = contract if not contract.is_empty() else None
+-    state = mgr.set(headline or arg, contract=contract)
++    goal_text, minutes = _parse_duration(headline)
++    state = mgr.set(goal_text or headline, contract=contract, minutes=minutes)
+     output = render("gateway.goal.set", "⊙ Goal set ({budget}-turn budget): {goal}",
+                     budget=state.max_turns, goal=state.goal)
++    if minutes:
++        output += render("gateway.goal.timed", "\n⏱ {minutes} min — deadline {deadline}",
++                         minutes=minutes,
++                         deadline=time.strftime("%H:%M", time.localtime(state.deadline or 0)))
+     if state.has_contract():
+         label = "Drafted completion contract:" if drafting else "Completion contract:"
+         output += f"\n{label}\n{state.contract.render_block()}"
+diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
+index d0b754f99a..122bd2556e 100644
+--- a/hermes_cli/goals.py
++++ b/hermes_cli/goals.py
+@@ -130,6 +130,13 @@ JUDGE_SYSTEM_PROMPT = (
+     "Return BLOCKED with the reason describing what is blocking. BLOCKED is "
+     "a refusal, not a completion — never return BLOCKED for a goal that "
+     "was achieved.\n\n"
++    "A response that says the session is at/over the model's context window and "
++    "must be compacted (/compact) or reset (/reset) to continue is NOT a "
++    "blocked goal — it is a recoverable resource state, not an impossibility "
++    "or a request for goal-redefining input. Return CONTINUE so the loop "
++    "compacts and keeps working. Only a goal that is genuinely impossible, "
++    "out of scope, or that requires user input to redefine the deliverable "
++    "is BLOCKED.\n\n"
+     "WAIT — the goal is NOT done, but the next step is to wait for async "
+     "work to finish rather than act again. Choose this ONLY when the agent's "
+     "progress is genuinely gated on something running on its own:\n"
+@@ -422,6 +429,9 @@ class GoalState:
+     max_turns: int = DEFAULT_MAX_TURNS
+     created_at: float = 0.0
+     last_turn_at: float = 0.0
++    # Optional wall-clock deadline (timed /goal … for 1h). When set, the loop keeps
++    # re-kicking work until it passes, then auto-completes (or nudges keep-working).
++    deadline: float = 0.0
+     last_verdict: Optional[str] = None        # "done" | "blocked" | "continue" | "wait" | "skipped"
+     last_reason: Optional[str] = None
+     paused_reason: Optional[str] = None       # why we auto-paused (budget, etc.)
+@@ -457,7 +467,7 @@ class GoalState:
+         data = json.loads(raw)
+         raw_subgoals = data.get("subgoals") or []
+         ints = {k: int(data.get(k) or 0) for k in ("turns_used", "consecutive_parse_failures", "consecutive_transport_failures", "waiting_on_delegations")}
+-        floats = {k: float(data.get(k) or 0.0) for k in ("created_at", "last_turn_at", "waiting_until", "waiting_since")}
++        floats = {k: float(data.get(k) or 0.0) for k in ("created_at", "last_turn_at", "waiting_until", "waiting_since", "deadline")}
+         return cls(
+             goal=data.get("goal", ""),
+             status=data.get("status", "active"),
+@@ -1156,15 +1166,23 @@ class GoalManager:
+         self._pause_state(paused_reason)
+         return _decision("paused", False, None, verdict, reason, message)
+ 
+-    def set(self, goal: str, *, max_turns: Optional[int] = None, contract: Optional[GoalContract] = None) -> GoalState:
++    def set(self, goal: str, *, max_turns: Optional[int] = None, contract: Optional[GoalContract] = None,
++            minutes: Optional[int] = None) -> GoalState:
+         goal = (goal or "").strip()
+         if not goal:
+             raise ValueError("goal text is empty")
++        now = time.time()
+         self._state = GoalState(
+-            goal=goal, status="active", turns_used=0, created_at=time.time(), last_turn_at=0.0,
++            goal=goal, status="active", turns_used=0, created_at=now, last_turn_at=0.0,
+             max_turns=int(max_turns) if max_turns else self.default_max_turns,
+             contract=contract if contract is not None else GoalContract(),
++            deadline=(now + int(minutes) * 60) if minutes else 0.0,
+         )
++        # A timed goal parks the loop into an active work mode until the deadline:
++        # the wait barrier is the clock, so the loop keeps re-kicking without the
++        # judge burning turns on "you're not done yet" verdicts.
++        if minutes:
++            self._state.waiting_until = self._state.deadline
+         return self._save()
+ 
+     def set_contract(self, contract: GoalContract) -> Optional[GoalState]:
+@@ -1467,9 +1485,34 @@ class GoalManager:
+         if state is None or state.status != "active":
+             return _decision(state.status if state else None, False, None, "inactive", "no active goal", "")
+ 
+-        # Parked on a live process or an unexpired deadline: quiesce without burning a turn.
++        # Timed goal (… for 1h): while the deadline is in the future, the wait barrier
++        # keeps the loop active but quiesced — re-kick the agent toward the goal with a
++        # remaining-time prompt instead of parking forever. Once the deadline passes,
++        # clear the timed re-kick and fall through to normal judging (the judge decides
++        # done; the turn budget still applies).
++        if state.deadline and time.time() < state.deadline:  # type: ignore[union-attr]
++            remain = state.deadline - time.time()  # type: ignore[union-attr]
++            mm, ss = int(remain // 60), int(remain % 60)
++            return _decision(
++                "active", True,
++                self.next_continuation_prompt(remaining=f"{mm}m {ss}s"),
++                "continue", "timed goal in progress",
++                f"↻ Timed goal — {mm}m {ss}s remaining. Keep working toward: {state.goal}. "
++                f"Do NOT stop to wait on a user question during this timebox — if you need a "
++                f"decision, go with your recommended option and note it as an assumption, or "
++                f"defer the question and keep working on another feature; surface it only after "
++                f"the time is up.",
++            )
++        if state.deadline and time.time() >= state.deadline:  # type: ignore[union-attr]
++            # Deadline passed. The hour is a FLOOR, not a ceiling — but it still ends:
++            # clear the timed re-kick so the NORMAL judge path resumes. The judge (or
++            # agent declaring done, /goal clear) concludes the goal; no infinite spin.
++            self.stop_waiting()
++            state.deadline = 0.0  # type: ignore[union-attr]
++            self._save()
++
+         if self.is_waiting():
+-            return self._waiting_decision(state)
++            return self._waiting_decision(state)  # type: ignore[arg-type]
+ 
+         state.turns_used += 1
+         state.last_turn_at = time.time()
+@@ -1502,6 +1545,26 @@ class GoalManager:
+         # BLOCKED verdict: the judge ruled the goal genuinely cannot be satisfied as stated (impossible, out
+         # of scope, needs user input). See #100954.
+         if verdict == "blocked":
++            # Context-overflow is a RECOVERABLE resource state, not a blocked goal.
++            # A judge that reads "session exceeds context window / compact / reset"
++            # as BLOCKED would kill an otherwise-healthy timed goal. Re-map it to
++            # CONTINUE so the next-turn preflight compacts and the loop keeps going.
++            _ctx_reason = reason.lower()
++            if (
++                "context window" in _ctx_reason
++                or "context overflow" in _ctx_reason
++                or "/compact" in _ctx_reason
++                or "compact" in _ctx_reason
++                or "context length" in _ctx_reason
++                or "too large" in _ctx_reason
++                or "session too large" in _ctx_reason
++            ):
++                self._save()
++                return _decision(
++                    "active", True, self.next_continuation_prompt(), "continue",
++                    f"context overflow (recoverable) — {reason}",
++                    f"↻ Continuing toward goal: {reason}",
++                )
+             return self._pause_decision(
+                 f"judged unachievable: {reason}", "blocked", reason,
+                 f"🚫 Goal judged unachievable — paused: {reason} Re-scope with /goal set, or override with /goal resume.",
+@@ -1539,19 +1602,24 @@ class GoalManager:
+             f"↻ Continuing toward goal ({state.turns_used}/{state.max_turns}): {reason}",
+         )
+ 
+-    def next_continuation_prompt(self) -> Optional[str]:
++    def next_continuation_prompt(self, *, remaining: str | None = None) -> Optional[str]:
+         s = self._state
+         if not s or s.status != "active":
+             return None
++        prompt = None
+         # Contract first (it carries the verification surface); subgoals fold in as extra criteria.
+         if s.has_contract():
+             contract_block = s.contract.render_block()
+             if s.subgoals:
+                 contract_block = f"{contract_block}\n{_render_extra_criteria(s.subgoals)}"
+-            return CONTINUATION_PROMPT_WITH_CONTRACT_TEMPLATE.format(goal=s.goal, contract_block=contract_block)
+-        if s.subgoals:
+-            return CONTINUATION_PROMPT_WITH_SUBGOALS_TEMPLATE.format(goal=s.goal, subgoals_block=s.render_subgoals_block())
+-        return CONTINUATION_PROMPT_TEMPLATE.format(goal=s.goal)
++            prompt = CONTINUATION_PROMPT_WITH_CONTRACT_TEMPLATE.format(goal=s.goal, contract_block=contract_block)
++        elif s.subgoals:
++            prompt = CONTINUATION_PROMPT_WITH_SUBGOALS_TEMPLATE.format(goal=s.goal, subgoals_block=s.render_subgoals_block())
++        else:
++            prompt = CONTINUATION_PROMPT_TEMPLATE.format(goal=s.goal)
++        # Timed goals: preface the stock continuation with the remaining clock so the
++        # agent sees it's a timebox, not an endless goal.
++        return (f"[Timed goal — {remaining} remaining]\n" + prompt) if remaining else prompt
+ 
+     def render_contract(self) -> str:
+         """Public helper for the /goal show + /goal draft slash commands."""
+diff --git a/tests/agent/test_timed_goal_clarify_gate.py b/tests/agent/test_timed_goal_clarify_gate.py
+new file mode 100644
+index 0000000000..675856aaca
+--- /dev/null
++++ b/tests/agent/test_timed_goal_clarify_gate.py
+@@ -0,0 +1,63 @@
++"""Structural guard: clarify() must be refused while a timed goal is mid-run.
++
++A timed goal (/goal … for <N>h|m) forces continued autonomous work until the
++deadline. The agent must not burn the clock waiting on a user answer — it should
++proceed with its recommended option or defer the question. This is enforced at the
++dispatch layer so it holds regardless of session.
++"""
++
++import time
++from types import SimpleNamespace
++
++from agent.tool_executor import _resolve_sequential_dispatch
++
++
++def _set_fake_goal(session_id, deadline):
++    """Store a goal row in the real SessionDB keyed by session_id so load_goal sees it."""
++    from hermes_cli.goals import GoalState, save_goal
++    st = GoalState(goal="timed test", status="active", turns_used=0, created_at=time.time(),
++                   last_turn_at=0.0, max_turns=20, deadline=deadline)
++    save_goal(session_id, st)
++
++
++def _ref():
++    return SimpleNamespace(name="clarify", args={"question": "pick one?"},
++                           task_id="task-1", call_id="call-1", trace=[])
++
++
++def _agent(session_id):
++    return SimpleNamespace(session_id=session_id,
++                           clarify_callback=lambda *a, **k: '{"user_response": "x"}')
++
++
++def _run(session_id):
++    dispatch = _resolve_sequential_dispatch(_agent(session_id), _ref(), [])
++    return dispatch.execute({})
++
++
++def test_clarify_refused_during_active_timed_goal(tmp_path, monkeypatch):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    sid = "clf-timed-active"
++    _set_fake_goal(sid, time.time() + 60)          # deadline in the future
++    out = _run(sid)
++    assert isinstance(out, dict) and "error" in out, out
++    assert "Timed goal in progress" in out["error"]
++
++
++def test_clarify_not_refused_when_deadline_passed(tmp_path, monkeypatch):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    sid = "clf-timed-past"
++    _set_fake_goal(sid, time.time() - 60)          # deadline passed → normal judging
++    out = _run(sid)
++    # Not structurally refused → not the timed-goal error.
++    assert not (isinstance(out, dict) and "Timed goal in progress" in out.get("error", ""))
++
++
++def test_clarify_not_refused_with_no_timed_goal(tmp_path, monkeypatch):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    sid = "clf-plain"
++    from hermes_cli.goals import GoalState, save_goal
++    save_goal(sid, GoalState(goal="plain", status="active", turns_used=0, created_at=time.time(),
++                             last_turn_at=0.0, max_turns=20, deadline=0.0))
++    out = _run(sid)
++    assert not (isinstance(out, dict) and "Timed goal in progress" in out.get("error", ""))
+\ No newline at end of file
+diff --git a/tests/hermes_cli/test_goals.py b/tests/hermes_cli/test_goals.py
+index 17c320913d..df6cf83684 100644
+--- a/tests/hermes_cli/test_goals.py
++++ b/tests/hermes_cli/test_goals.py
+@@ -910,6 +910,55 @@ class TestBlockedVerdict:
+         assert mgr.state.status == "paused"
+         assert "unachievable" in (mgr.state.paused_reason or "").lower()
+ 
++    def test_blocked_with_context_overflow_becomes_continue(self, hermes_home):
++        """A blocked verdict caused by session/context overflow must NOT pause the goal —
++        it is a recoverable resource state, so the loop compacts and keeps working."""
++        from unittest.mock import patch
++        from hermes_cli.goals import GoalManager
++
++        mgr = GoalManager(session_id="ctx-of-subject-sid")
++        mgr.set("upgrade the sentinel")
++        with patch(
++            "hermes_cli.goals.judge_goal",
++            return_value=(
++                "blocked",
++                "The agent cannot proceed because the session exceeds the model's "
++                "context window and requires the user to /compact or /reset before continuing.",
++                False, None, False,
++            ),
++        ):
++            decision = mgr.evaluate_after_turn(
++                "I cannot continue — context window full, need /compact."
++            )
++
++        assert decision["verdict"] == "continue"
++        assert decision["status"] == "active"
++        assert decision["should_continue"] is True
++        assert mgr.state is not None
++        assert mgr.state.status == "active"
++
++    def test_blocked_context_overflow_guard_is_deterministic(self, hermes_home):
++        """The context-overflow remap runs even if the judge's reason wording varies,
++        and a genuinely unachievable goal still pauses."""
++        from unittest.mock import patch
++        from hermes_cli.goals import GoalManager
++
++        for reason, should_continue in (
++            ("session too large for model context", True),
++            ("requires context length reduction via /compact", True),
++            ("the dependency is deleted upstream and cannot be rebuilt", False),
++        ):
++            mgr = GoalManager(session_id=f"gov-{abs(hash(reason))}")
++            mgr.set("some goal")
++            with patch(
++                "hermes_cli.goals.judge_goal",
++                return_value=("blocked", reason, False, None, False),
++            ):
++                decision = mgr.evaluate_after_turn("some response")
++            assert decision["should_continue"] is should_continue, (
++                f"reason={reason!r} should_continue={should_continue}"
++            )
++
+ 
+ def test_goal_session_db_is_the_registry_shared_handle(hermes_home):
+     """GoalManager must borrow the process-wide registry handle for ``state.db`` rather than
+diff --git a/tests/tui_gateway/test_goal_command.py b/tests/tui_gateway/test_goal_command.py
+index 2f04458e66..eb58793eb3 100644
+--- a/tests/tui_gateway/test_goal_command.py
++++ b/tests/tui_gateway/test_goal_command.py
+@@ -528,3 +528,31 @@ def test_goal_draft_uses_session_profile_without_blocking_rpc_reader(
+         assert state.max_turns == 37 and state.contract.verification == "tests pass"
+     result = next(frame["result"] for frame in frames if frame.get("id") == "draft")
+     assert result["type"] == "send" and result["message"] == state.goal
++
++
++def test_parse_duration_accepts_hr_hrs_hour_hours(hermes_home):
++    """#timed-goal: '1hr' (and hour variants) must parse as seconds-to-minutes.
++
++    Regression: only bare 'h'/'m' were accepted, so '/goal upgrade x 1hr'
++    produced a NON-timed goal (deadline None) — the agent worked ~1 turn and
++    stopped instead of grinding the full hour. '1hr' is the most common
++    spelling in the user's real goal messages, so it must resolve to 60m.
++    """
++    from hermes_cli.goal_command import _parse_duration
++
++    # hour spellings -> 60 minutes (timed), not None (untimed)
++    for suf in ("1h", "1hr", "1hrs", "1hour", "1hours"):
++        text, mins = _parse_duration(f"upgrade sentinel {suf}")
++        assert text == "upgrade sentinel", suf
++        assert mins == 60, f"{suf}: expected 60, got {mins}"
++    for suf in ("for 1h", "for 1hr", "for 2hours"):
++        text, mins = _parse_duration(f"upgrade sentinel {suf}")
++        assert mins in (60, 120), f"{suf}: expected timed, got {mins}"
++
++    # minutes still work, explicit 'for', and bare no-unit = bare minutes
++    assert _parse_duration("upgrade sentinel 90m")[1] == 90
++    assert _parse_duration("upgrade sentinel 45")[1] == 45
++    assert _parse_duration("upgrade sentinel for 45")[1] == 45
++
++    # no duration -> NOT timed (None), goal text preserved
++    assert _parse_duration("upgrade sentinel") == ("upgrade sentinel", None)
