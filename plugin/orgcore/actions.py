@@ -113,7 +113,7 @@ def _run_entry(root: Path, name: str) -> dict:
 def _index_is_stale(root: Path, cfg: dict) -> bool:
     """True when index.json is missing or older than the newest on-disk entry.
 
-    Lets convenience reads (find/status/check/profiles) transparently refresh a
+    Lets convenience reads (find/status/check) transparently refresh a
     stale index so the agent never has to remember `org index` by hand.
     """
     index_file = root / "index.json"

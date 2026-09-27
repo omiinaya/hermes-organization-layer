@@ -29,7 +29,7 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
    tools so the agent itself routes work into the right folders and refreshes the index
    as part of its normal workflow (clone -> projects/, scratch script -> test-scripts/,
    session end -> index). Convenience: `find --run` launches the top hit's entry_points,
-   and read commands (`find`/`status`/`profiles`) transparently refresh a stale index
+   and read commands (`find`/`status`) transparently refresh a stale index
    so it never lags the workspace; `check` stays the honest drift detector (it compares
    the *persisted* snapshot, so it never auto-refreshes).
 
@@ -54,11 +54,6 @@ An **organization layer** = workspace convention + index + hygiene + agent tooli
 - `default_workspace_root()` resolves per-OS and honors `HERMES_ORG_WORKSPACE`.
 - Archive lifecycle is fully reversible: `prune --apply` tars into `_archive/`,
   `restore <name>` extracts back (path-traversal guarded, refuses to overwrite).
-- **Profile routing is a second domain, not a second index**: `profiles/` entries live
-  in the same workspace/index as filesystem entries and share the same venv, check,
-  prune, and privacy machinery. Profiles are auto-registered from live Hermes wiring
-  (`$HERMES_HOME/profiles/*` + the active home), never hardcoded. Absolute home paths
-  are deliberately not persisted (strict privacy).
 - **Feature gate reads live wiring too**: `features.py` probes `$HERMES_HOME` state
   (backups, state-snapshots, checkpoints, cron, MCP, projects, config.yaml) and
   `orgfeatures.probe()` accepts an injectable `user_home` so tests stay hermetic.

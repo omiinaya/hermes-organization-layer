@@ -1,6 +1,6 @@
 """Feature-coverage gate — report which Hermes capabilities are in use.
 
-The org layer indexes the workspace and the profiles; this module answers the
+The org layer indexes the workspace; this module answers the
 "are we using Hermes to its fullest / are we production-safe" question. It
 probes live state under ``$HERMES_HOME`` (never hardcoded) and reports each
 capability as ok / warn / missing with a one-line hint, then computes an overall
