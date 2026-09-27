@@ -31,6 +31,65 @@ def test_init_creates_folders_and_config(ws):
     assert (ws / ".org" / "config.json").exists()
 
 
+def test_config_workspace_key_is_honoured_without_env(tmp_path, monkeypatch):
+    """A workspace set in config.json must survive `load_config`.
+
+    Regression: `load_config` copied only
+    (folders, excludes, policy, version, language, privacy) out of the saved
+    config, so a `workspace` key was silently dropped. `_root()` reads the
+    config from the *default* root and then returns cfg["workspace"], so with
+    no HERMES_ORG_WORKSPACE set the workspace in config.json had no effect at
+    all — the only way to move the root was the env var, and the config file
+    was a lie.
+    """
+    # No env var: exactly the situation that was broken.
+    monkeypatch.delenv("HERMES_ORG_WORKSPACE", raising=False)
+
+    saved = {"version": 1, "workspace": str(tmp_path), "language": "en"}
+    org = tmp_path / ".org"
+    org.mkdir(parents=True)
+    (org / "config.json").write_text(json.dumps(saved))
+
+    cfg = config.load_config(tmp_path)
+    assert cfg["workspace"] == str(tmp_path)
+
+
+def test_env_still_overrides_config_workspace(tmp_path, monkeypatch):
+    """HERMES_ORG_WORKSPACE must keep winning over the config file."""
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.setenv("HERMES_ORG_WORKSPACE", str(other))
+
+    org = tmp_path / ".org"
+    org.mkdir(parents=True)
+    (org / "config.json").write_text(json.dumps({"workspace": str(tmp_path)}))
+
+    cfg = config.load_config(tmp_path)
+    assert cfg["workspace"] == str(other)
+
+
+def test_dir_size_skips_excluded_dirs(tmp_path):
+    """`_dir_size` must not descend into excluded directory names.
+
+    Regression: it used `rglob("*")` with no excludes, so indexing a workspace
+    of real repos walked `target/`, `node_modules/` and `.venv/` (86 entries
+    took 372s). The excluded tree must contribute zero bytes.
+    """
+    entry = tmp_path / "proj"
+    (entry / "src").mkdir(parents=True)
+    (entry / "src" / "main.py").write_text("x" * 100)
+
+    junk = entry / "node_modules" / "pkg"
+    junk.mkdir(parents=True)
+    (junk / "huge.js").write_text("y" * 100_000)
+
+    with_excludes = index._dir_size(entry, ("node_modules",))
+    without = index._dir_size(entry)
+
+    assert with_excludes == 100
+    assert without == 100_100
+
+
 def test_new_entry_creates_meta_and_index(ws):
     tag, data = actions.cmd_new("projects", "my-app", "A test app")
     assert tag == "NEW" and data["ok"]

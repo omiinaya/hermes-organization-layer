@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,17 +47,33 @@ def _days_ago(mtime: float) -> int | None:
     return int((datetime.now(timezone.utc).timestamp() - mtime) // 86400)
 
 
-def _dir_size(entry: Path) -> int:
+def _dir_size(entry: Path, excludes: tuple = ()) -> int:
+    """Total bytes under `entry`, skipping excluded directory names.
+
+    `excludes` matters for correctness of TIME, not just tidiness: without it
+    this walked into `target/`, `node_modules/` and `.venv/`, so indexing a
+    workspace of real repos spent minutes in build output (86 entries took
+    372s). The walk is depth-first with pruned subtrees, so excluded dirs are
+    never descended into at all.
+    """
     total = 0
-    try:
-        for p in entry.rglob("*"):
-            try:
-                if p.is_file():
-                    total += p.stat().st_size
-            except OSError:
-                pass
-    except Exception:
-        pass
+    stack = [entry]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for d in it:
+                    try:
+                        if d.is_dir(follow_symlinks=False):
+                            if d.name in excludes:
+                                continue
+                            stack.append(Path(d.path))
+                        elif d.is_file(follow_symlinks=False):
+                            total += d.stat().st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
     return total
 
 
@@ -141,7 +158,7 @@ def build_items(root: Path, cfg: dict) -> list[dict]:
             "last_activity": _entry_mtime_iso(entry),
             "entry_points": meta.get("entry_points", []) or [],
             "venvs": merge_venvs(detect_venvs(entry), meta.get("venvs") or []),
-            "size_bytes": _dir_size(entry),
+            "size_bytes": _dir_size(entry, tuple(cfg.get("excludes", ()))),
         })
     return items
 

@@ -81,7 +81,13 @@ def load_config(root: Path) -> dict:
     if cfg_path.exists():
         try:
             saved = json.loads(cfg_path.read_text(encoding="utf-8"))
-            for key in ("folders", "excludes", "policy", "version", "language", "privacy"):
+            # "workspace" MUST be in this tuple: `_root()` reads the config from
+            # the *default* location and then returns cfg["workspace"], so a
+            # workspace set in config.json was silently dropped and the root
+            # could never be moved off the platform default. Only the env var
+            # re-rooted anything, which made the config file's own value a lie.
+            for key in ("folders", "excludes", "policy", "version", "language",
+                        "privacy", "workspace"):
                 if key in saved:
                     cfg[key] = saved[key]
         except Exception:
