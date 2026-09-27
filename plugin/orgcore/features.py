@@ -19,8 +19,6 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import profiles as orgprofiles
-
 
 def _env_home() -> Path:
     env = os.environ.get("HERMES_HOME")
@@ -174,15 +172,6 @@ def probe(home: Path | None = None, user_home: Path | None = None) -> dict:
                  f"{len(pl)} plugin(s)", "`hermes plugins` manage them", "advisory"))
     caps.append(_cap("skills", "ok" if sk else "missing",
                  f"{len(sk)} skill(s)", "`hermes skills` manage them", "advisory"))
-
-    # Profiles (routing hygiene).
-    profs = orgprofiles.discover()
-    if len(profs) > 1:
-        caps.append(_cap("profiles", "ok", f"{len(profs)} profile(s)",
-                     "`org profiles` routes work; `hermes -p <name>` to switch", "advisory"))
-    else:
-        caps.append(_cap("profiles", "warn", "only the default profile",
-                     "consider `hermes profile create` for distinct workloads", "advisory"))
 
     # ── Verdict ────────────────────────────────────────────────────────────
     critical = [c for c in caps if c["tier"] == "critical"]

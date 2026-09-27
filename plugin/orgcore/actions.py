@@ -18,7 +18,6 @@ from pathlib import Path
 from . import config
 from . import features as orgfeatures
 from . import index as orgindex
-from . import profiles as orgprofiles
 from . import workspace as orgws
 
 # Python 3.12+ supports tarfile.extractall(filter=...) for safe extraction.
@@ -38,53 +37,11 @@ def cmd_init(workspace: str | None = None) -> tuple:
 def cmd_index() -> tuple:
     root = _root()
     cfg = config.load_config(root)
-    # Auto-register Hermes profiles into the workspace so the index always
-    # reflects live wiring (new profiles appear; descriptions refresh).
-    reg = orgprofiles.register(root, cfg)
     report = orgindex.write_index(root, cfg)
-    report["profiles"] = {"created": reg["created"], "updated": reg["updated"]}
     return "INDEX OK", report
 
 
-def cmd_profiles() -> tuple:
-    """List registered Hermes profiles with their routing metadata."""
-    root = _root()
-    cfg = config.load_config(root)
-    _maybe_refresh_index(root, cfg)  # keep the index honest before listing
-    reg = orgprofiles.register(root, cfg)  # ensure all live profiles are present
-    items = []
-    for raw in orgws.list_entries(root, cfg):
-        if raw["kind"] != "profiles":
-            continue
-        meta = config.load_meta(raw["dir"])
-        items.append({
-            "name": raw["name"],
-            "rel_path": raw["rel_path"],
-            "status": meta.get("status", "active"),
-            "purpose": meta.get("description") or meta.get("purpose", ""),
-            "model": meta.get("model", ""),
-            "when_to_use": meta.get("when_to_use", ""),
-            "launch": meta.get("launch", ""),
-            "tools": meta.get("tools", []),
-            "venvs": meta.get("venvs", []),
-            "is_active": meta.get("is_active", False),
-        })
-    return "PROFILES", {"registered": reg["profiles"], "items": items}
 
-
-def cmd_suggest(task: str) -> tuple:
-    """Suggest which profile to use for a workload/task description."""
-    res = orgprofiles.suggest(str(_root()), task)
-    return "SUGGEST", res
-
-
-def cmd_set_profile(name: str, **fields) -> tuple:
-    """Update routing fields (model, when_to_use, tools, notes...) on a profile."""
-    res = orgprofiles.set_entry(_root(), name, **fields)
-    if res["ok"]:
-        cfg = config.load_config(_root())
-        orgindex.write_index(_root(), cfg)
-    return "PROFILE SET", res
 
 
 def cmd_features() -> tuple:
@@ -177,7 +134,6 @@ def _maybe_refresh_index(root: Path, cfg: dict) -> bool:
     """Rebuild the index when stale; returns True if a refresh happened."""
     if not _index_is_stale(root, cfg):
         return False
-    orgprofiles.register(root, cfg)
     orgindex.write_index(root, cfg)
     return True
 
